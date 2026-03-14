@@ -96,6 +96,58 @@ RULES:
 - Every new activity_log must use a real user_id and real primary_entity_id from the dataset
 - Minimum mutations only — touch nothing that doesn't need to change`
 
+const QA_REPORT_SYSTEM_PROMPT = `You are a senior QA engineer analyzing the impact of an edge case injected into a software sandbox environment.
+
+You will receive:
+- The state of the system BEFORE chaos was injected
+- The state of the system AFTER chaos was injected
+- A summary of what changed
+
+Generate a detailed QA report as pure JSON with this exact structure:
+{
+  "report_title": "QA Edge Case Report — [chaos type]",
+  "generated_at": "[ISO timestamp]",
+  "chaos_type": "[chaos type]",
+  "executive_summary": "2-3 sentence plain English summary of what happened and its impact",
+  "what_happened": [
+    "Specific thing that changed 1",
+    "Specific thing that changed 2"
+  ],
+  "vulnerabilities": [
+    {
+      "title": "Vulnerability name",
+      "severity": "critical | high | medium | low",
+      "description": "What the vulnerability is",
+      "affected_component": "Which part of the system"
+    }
+  ],
+  "affected_systems": [
+    {
+      "system": "System name",
+      "impact": "critical | high | medium | low",
+      "details": "How it was affected"
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "TC-001",
+      "title": "Test case title",
+      "scenario": "Given/When/Then format test scenario",
+      "expected_result": "What should happen",
+      "priority": "high | medium | low"
+    }
+  ],
+  "recommended_fixes": [
+    {
+      "priority": 1,
+      "fix": "What to fix",
+      "rationale": "Why this matters"
+    }
+  ]
+}
+
+Be specific — reference actual user IDs, transaction IDs, and field values from the data. This should read like a real QA report a senior engineer would write. Return only valid JSON.`
+
 type MemoryRow = {
   id: string
   product_context: string | null
@@ -117,6 +169,45 @@ type TemplateRow = {
   description: string
   data: SandboxData
   created_at: string
+}
+
+type ReportRow = {
+  id: string
+  sandbox_id: string
+  chaos_type: string
+  report: QAReportPayload
+  created_at: string
+}
+
+type QAReportPayload = {
+  report_title?: string
+  generated_at?: string
+  chaos_type?: string
+  executive_summary?: string
+  what_happened?: string[]
+  vulnerabilities?: Array<{
+    title?: string
+    severity?: string
+    description?: string
+    affected_component?: string
+  }>
+  affected_systems?: Array<{
+    system?: string
+    impact?: string
+    details?: string
+  }>
+  test_cases?: Array<{
+    id?: string
+    title?: string
+    scenario?: string
+    expected_result?: string
+    priority?: string
+  }>
+  recommended_fixes?: Array<{
+    priority?: number
+    fix?: string
+    rationale?: string
+  }>
 }
 
 type ChaosMutation<TChanges> = {
@@ -596,6 +687,69 @@ app.post(
       expires_at: sandbox.expires_at,
       changedIds,
       chaos_summary,
+    })
+  }),
+)
+
+app.post(
+  '/api/report',
+  asyncRoute(async (request, response) => {
+    const sandboxId =
+      typeof request.body.sandbox_id === 'string' ? request.body.sandbox_id.trim() : ''
+    const preChaosData = request.body.pre_chaos_data
+    const postChaosData = request.body.post_chaos_data
+    const changedIds = Array.isArray(request.body.changed_ids)
+      ? (request.body.changed_ids as string[])
+      : []
+    const chaosSummary =
+      typeof request.body.chaos_summary === 'string' ? request.body.chaos_summary.trim() : ''
+    const chaosType =
+      typeof request.body.chaos_type === 'string' ? request.body.chaos_type.trim() : ''
+
+    if (!sandboxId || !postChaosData) {
+      response.status(400).json({ error: 'sandbox_id and post_chaos_data are required.' })
+      return
+    }
+
+    const prompt = [
+      `Chaos type: ${chaosType}`,
+      `Chaos summary: ${chaosSummary}`,
+      `Changed IDs: ${JSON.stringify(changedIds)}`,
+      '',
+      'Pre-chaos data:',
+      JSON.stringify(preChaosData ?? {}),
+      '',
+      'Post-chaos data:',
+      JSON.stringify(postChaosData),
+      '',
+      'Return only raw JSON.',
+    ].join('\n')
+
+    const rawJson = await requestModelJson(QA_REPORT_SYSTEM_PROMPT, prompt)
+    const report = JSON.parse(rawJson.trim()) as QAReportPayload
+    if (!report.generated_at) {
+      report.generated_at = new Date().toISOString()
+    }
+    if (!report.chaos_type) {
+      report.chaos_type = chaosType
+    }
+
+    const reportId = randomUUID()
+    ensureSupabaseEnv()
+    const { error } = await supabase.from('reports').insert({
+      id: reportId,
+      sandbox_id: sandboxId,
+      chaos_type: chaosType,
+      report,
+    })
+
+    if (error) {
+      throw error
+    }
+
+    response.status(201).json({
+      report_id: reportId,
+      report,
     })
   }),
 )

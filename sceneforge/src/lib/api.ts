@@ -65,6 +65,50 @@ export type ChaosResponse = SandboxResponse & {
   chaos_summary: string
 }
 
+export type QAReportVulnerability = {
+  title?: string
+  severity?: string
+  description?: string
+  affected_component?: string
+}
+
+export type QAReportAffectedSystem = {
+  system?: string
+  impact?: string
+  details?: string
+}
+
+export type QAReportTestCase = {
+  id?: string
+  title?: string
+  scenario?: string
+  expected_result?: string
+  priority?: string
+}
+
+export type QAReportRecommendedFix = {
+  priority?: number
+  fix?: string
+  rationale?: string
+}
+
+export type QAReport = {
+  report_title?: string
+  generated_at?: string
+  chaos_type?: string
+  executive_summary?: string
+  what_happened?: string[]
+  vulnerabilities?: QAReportVulnerability[]
+  affected_systems?: QAReportAffectedSystem[]
+  test_cases?: QAReportTestCase[]
+  recommended_fixes?: QAReportRecommendedFix[]
+}
+
+export type ReportResponse = {
+  report_id: string
+  report: QAReport
+}
+
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001'
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -135,6 +179,20 @@ export function generateFromTemplate(templateId: string) {
     body: JSON.stringify({
       template_id: templateId,
     }),
+  })
+}
+
+export function generateReport(payload: {
+  sandbox_id: string
+  pre_chaos_data: unknown
+  post_chaos_data: unknown
+  changed_ids: string[]
+  chaos_summary: string
+  chaos_type: string
+}) {
+  return apiRequest<ReportResponse>('/api/report', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

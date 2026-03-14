@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   applyChaos,
   deleteSandboxRecord,
   generateFromTemplate,
+  generateReport,
   generateSandbox,
   getSandbox,
   getSandboxes,
@@ -11,6 +12,7 @@ import {
   saveTemplate,
   type ActivityLogRecord,
   type PrimaryEntityRecord,
+  type QAReport,
   type SandboxSummary,
   type SandboxResponse,
   type TemplateSummary,
@@ -41,6 +43,12 @@ type PreviousPromptItem = {
   prompt: string
   sandbox_id: string
   timestamp: number
+}
+type SessionReportItem = {
+  report_id: string
+  report: QAReport
+  chaos_type: string
+  generated_at: string
 }
 type TableRow = Record<string, unknown>
 type PermissionTier = 'admin' | 'standard' | 'restricted'
@@ -415,6 +423,12 @@ const Chatbot: React.FC = () => {
   const [timeRemaining, setTimeRemaining] = useState<string | null>(null)
   const [selectedViewingUserId, setSelectedViewingUserId] = useState<string>('')
   const [isChaosBannerDismissed, setIsChaosBannerDismissed] = useState(false)
+  const [lastChaosType, setLastChaosType] = useState<string>('')
+  const [sessionReports, setSessionReports] = useState<SessionReportItem[]>([])
+  const [reportModalOpen, setReportModalOpen] = useState(false)
+  const [reportModalContent, setReportModalContent] = useState<QAReport | null>(null)
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false)
+  const preChaosDataRef = useRef<LoadedSandboxData | null>(null)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -711,6 +725,7 @@ const Chatbot: React.FC = () => {
     setStatusMessage(null)
 
     const chaosType = chaosTypes[Math.floor(Math.random() * chaosTypes.length)]
+    preChaosDataRef.current = JSON.parse(JSON.stringify(sandbox.data)) as LoadedSandboxData
 
     try {
       const result = await applyChaos(sandbox.sandbox_id, chaosType)
@@ -734,11 +749,121 @@ const Chatbot: React.FC = () => {
       setChaosIndicator(result.chaos_summary)
       setIsChaosButtonFlashing(true)
       setIsChaosBannerDismissed(false)
+      setLastChaosType(chaosType)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
       setIsApplyingChaos(false)
     }
+  }
+
+  async function handleGenerateReport() {
+    if (!sandbox || !chaosHighlights || isGeneratingReport) {
+      return
+    }
+    const preData = preChaosDataRef.current
+    if (!preData) {
+      setErrorMessage('No pre-chaos snapshot available. Inject chaos first.')
+      return
+    }
+    setIsGeneratingReport(true)
+    setErrorMessage(null)
+    try {
+      const { report_id, report } = await generateReport({
+        sandbox_id: sandbox.sandbox_id,
+        pre_chaos_data: preData,
+        post_chaos_data: sandbox.data,
+        changed_ids: changedRowIds,
+        chaos_summary: chaosHighlights.chaosSummary,
+        chaos_type: lastChaosType || 'unknown',
+      })
+      setSessionReports((prev) => [
+        {
+          report_id,
+          report,
+          chaos_type: lastChaosType || 'unknown',
+          generated_at: report.generated_at ?? new Date().toISOString(),
+        },
+        ...prev,
+      ])
+      setReportModalContent(report)
+      setReportModalOpen(true)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsGeneratingReport(false)
+    }
+  }
+
+  function handleOpenReport(item: SessionReportItem) {
+    setReportModalContent(item.report)
+    setReportModalOpen(true)
+  }
+
+  function handleDownloadReport() {
+    const report = reportModalContent
+    if (!report) return
+    const lines: string[] = []
+    lines.push(report.report_title ?? 'QA Edge Case Report')
+    lines.push('')
+    lines.push('Generated: ' + (report.generated_at ?? '—'))
+    lines.push('Chaos type: ' + (report.chaos_type ?? '—'))
+    lines.push('')
+    lines.push('EXECUTIVE SUMMARY')
+    lines.push('────────────────')
+    lines.push(report.executive_summary ?? '')
+    lines.push('')
+    if (report.what_happened?.length) {
+      lines.push('WHAT HAPPENED')
+      lines.push('─────────────')
+      report.what_happened.forEach((s, i) => lines.push(`${i + 1}. ${s}`))
+      lines.push('')
+    }
+    if (report.vulnerabilities?.length) {
+      lines.push('VULNERABILITIES')
+      lines.push('───────────────')
+      report.vulnerabilities.forEach((v) => {
+        lines.push(`- [${(v.severity ?? '').toUpperCase()}] ${v.title ?? ''}`)
+        lines.push(`  ${v.description ?? ''}`)
+        lines.push(`  Affected: ${v.affected_component ?? '—'}`)
+      })
+      lines.push('')
+    }
+    if (report.affected_systems?.length) {
+      lines.push('AFFECTED SYSTEMS')
+      lines.push('────────────────')
+      report.affected_systems.forEach((a) => {
+        lines.push(`- ${a.system ?? '—'} [${(a.impact ?? '').toUpperCase()}]`)
+        lines.push(`  ${a.details ?? ''}`)
+      })
+      lines.push('')
+    }
+    if (report.test_cases?.length) {
+      lines.push('TEST CASES')
+      lines.push('───────────')
+      report.test_cases.forEach((tc) => {
+        lines.push(`${tc.id ?? '—'} [${(tc.priority ?? '').toUpperCase()}]`)
+        lines.push(`Title: ${tc.title ?? '—'}`)
+        lines.push(`Scenario: ${tc.scenario ?? '—'}`)
+        lines.push(`Expected: ${tc.expected_result ?? '—'}`)
+        lines.push('')
+      })
+    }
+    if (report.recommended_fixes?.length) {
+      lines.push('RECOMMENDED FIXES')
+      lines.push('─────────────────')
+      report.recommended_fixes.forEach((r) => {
+        lines.push(`${r.priority ?? ''}. ${r.fix ?? '—'}`)
+        lines.push(`   Rationale: ${r.rationale ?? '—'}`)
+      })
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qa-report-${report.chaos_type ?? 'report'}-${(report.generated_at ?? '').slice(0, 10)}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   function handleSaveTemplate() {
@@ -948,6 +1073,36 @@ const Chatbot: React.FC = () => {
               )}
             </ul>
           </div>
+
+          <div className="reports-section">
+            <h3>Reports</h3>
+            <ul className="history-list">
+              {sessionReports.length === 0 ? (
+                <li className="history-empty">QA reports from this session will appear here.</li>
+              ) : (
+                sessionReports.map((item) => (
+                  <li key={item.report_id} className="history-item">
+                    <button
+                      type="button"
+                      className="history-button"
+                      onClick={() => handleOpenReport(item)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                      </svg>
+                      <span className="history-text">
+                        {item.report.report_title ?? `Report — ${item.chaos_type}`}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
         </div>
 
         <div className="sidebar-footer">
@@ -1018,6 +1173,23 @@ const Chatbot: React.FC = () => {
             >
               {isApplyingChaos ? 'Injecting...' : 'Chaos'}
             </button>
+            {chaosHighlights && sandbox ? (
+              <button
+                type="button"
+                className="header-action-btn qa-report-btn"
+                onClick={() => void handleGenerateReport()}
+                disabled={isGeneratingReport || !sandbox}
+              >
+                {isGeneratingReport ? (
+                  <>
+                    <span className="report-btn-spinner" aria-hidden="true" />
+                    Analyzing edge case...
+                  </>
+                ) : (
+                  'Generate QA Report'
+                )}
+              </button>
+            ) : null}
             {isTemplateFormOpen ? (
               <div className="template-inline-form">
                 <input
@@ -1231,6 +1403,122 @@ const Chatbot: React.FC = () => {
           <p className="input-footer">SceneForge can make mistakes. Verify test data before production simulations.</p>
         </div>
       </main>
+
+      {/* QA Report Modal */}
+      {reportModalOpen && reportModalContent && (
+        <div className="report-overlay" onClick={() => setReportModalOpen(false)}>
+          <div
+            className="report-panel"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-labelledby="report-panel-title"
+          >
+            <header className="report-panel-header">
+              <div className="report-panel-title-row">
+                <h2 id="report-panel-title" className="report-panel-title">QA EDGE CASE REPORT</h2>
+                <div className="report-panel-actions">
+                  <button type="button" className="report-panel-btn download" onClick={handleDownloadReport}>
+                    Download Report
+                  </button>
+                  <button type="button" className="report-panel-btn close" onClick={() => setReportModalOpen(false)}>
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div className="report-panel-meta">
+                <span>Generated: {reportModalContent.generated_at ? new Date(reportModalContent.generated_at).toLocaleString() : '—'}</span>
+                <span>Chaos: {reportModalContent.chaos_type ?? '—'}</span>
+              </div>
+              <div className="report-panel-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+            </header>
+            <div className="report-panel-body">
+              {reportModalContent.executive_summary ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Executive Summary</h3>
+                  <p className="report-executive-summary">{reportModalContent.executive_summary}</p>
+                </section>
+              ) : null}
+              {reportModalContent.what_happened && reportModalContent.what_happened.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">What Happened</h3>
+                  <ol className="report-list">
+                    {reportModalContent.what_happened.map((item, i) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+              {reportModalContent.vulnerabilities && reportModalContent.vulnerabilities.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Vulnerabilities</h3>
+                  <div className="report-cards">
+                    {reportModalContent.vulnerabilities.map((v, i) => (
+                      <div key={i} className="report-card">
+                        <span className={`report-severity-badge severity-${(v.severity ?? 'medium').toLowerCase()}`}>
+                          {(v.severity ?? 'medium').toUpperCase()}
+                        </span>
+                        <strong>{v.title ?? '—'}</strong>
+                        <p>{v.description ?? ''}</p>
+                        {v.affected_component ? <span className="report-affected">Affected: {v.affected_component}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {reportModalContent.affected_systems && reportModalContent.affected_systems.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Affected Systems</h3>
+                  <div className="report-cards">
+                    {reportModalContent.affected_systems.map((a, i) => (
+                      <div key={i} className="report-card">
+                        <span className={`report-impact-badge impact-${(a.impact ?? 'medium').toLowerCase()}`}>
+                          {(a.impact ?? 'medium').toUpperCase()}
+                        </span>
+                        <strong>{a.system ?? '—'}</strong>
+                        <p>{a.details ?? ''}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {reportModalContent.test_cases && reportModalContent.test_cases.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Test Cases</h3>
+                  <div className="report-test-cases">
+                    {reportModalContent.test_cases.map((tc, i) => (
+                      <div key={i} className="report-test-case">
+                        <div className="report-test-case-header">
+                          <span className="report-test-case-id">{tc.id ?? `TC-${String(i + 1).padStart(3, '0')}`}</span>
+                          <span className={`report-priority-badge priority-${(tc.priority ?? 'medium').toLowerCase()}`}>
+                            {(tc.priority ?? 'medium').toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="report-test-case-divider">────────────────</div>
+                        <p className="report-test-case-title"><strong>Title:</strong> {tc.title ?? '—'}</p>
+                        <p className="report-test-case-scenario"><strong>Scenario:</strong> {tc.scenario ?? '—'}</p>
+                        <p className="report-test-case-expected"><strong>Expected:</strong> {tc.expected_result ?? '—'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {reportModalContent.recommended_fixes && reportModalContent.recommended_fixes.length > 0 ? (
+                <section className="report-section">
+                  <h3 className="report-section-title">Recommended Fixes</h3>
+                  <ol className="report-fixes-list">
+                    {reportModalContent.recommended_fixes.map((r, i) => (
+                      <li key={i}>
+                        <strong>{r.priority ?? i + 1}. {r.fix ?? '—'}</strong>
+                        {r.rationale ? <p>{r.rationale}</p> : null}
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Databases Modal */}
       {isDbModalOpen && (
