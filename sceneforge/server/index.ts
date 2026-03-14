@@ -22,14 +22,29 @@ const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment
 
 const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine. Generate a realistic, internally consistent sandbox environment as pure JSON with no markdown, no explanation, no code blocks — just raw JSON.
 
-The JSON must contain:
-- users: array of 3-5 users, each with id (uuid), name, email, role (admin/analyst/viewer), status, created_at
-- transactions: array of 10-15 transactions, each with id (uuid), user_id (must match a real user id from users array), amount, status, type, created_at, metadata
-- activity_logs: array of 15-20 logs, each with id (uuid), user_id (must match a real user id), transaction_id (must match a real transaction id), action, timestamp (chronologically coherent), details
-- feature_flags: object with 4-6 boolean flags relevant to the described environment
-- dashboard_metrics: object with summary stats (total_revenue, active_users, failed_transactions, anomaly_score) derived from the actual data above
+Based on the user's description, infer the most appropriate entity types and field names for their domain. Do not always use "transactions" or "activity_logs" — use domain-specific names.
 
-CRITICAL: Every foreign key reference must be valid. user_id in transactions must be a real user id. transaction_id in activity_logs must be a real transaction id. Timestamps must be chronologically coherent. The data must tell a consistent story.`
+For example:
+- Ride sharing app -> trips (with fields: id, driver_id, rider_id, origin, destination, distance_km, fare, status, surge_multiplier, rating, created_at)
+- Hospital -> appointments (with fields: id, patient_id, doctor_id, type, diagnosis, duration_mins, billing_amount, insurance_verified, status, created_at)
+- E-commerce -> orders (with fields: id, customer_id, items, total_amount, discount_code, shipping_status, created_at)
+
+Always return this structure:
+{
+  "users": [...],
+  "primary_entities": [...],
+  "activity_logs": [...],
+  "feature_flags": {},
+  "dashboard_metrics": {},
+  "schema_info": {
+    "primary_entity_name": "trips",
+    "domain": "ride sharing"
+  }
+}
+
+Generate field names that make sense for the described domain. Be creative and specific.
+
+CRITICAL: Every foreign key reference must be valid. user_id in activity_logs must be a real user id. transaction_id in activity_logs must point to a real id from primary_entities. Timestamps must be chronologically coherent. The data must tell a consistent story.`
 
 const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. Given a sandbox dataset and a chaos type, return ONLY a JSON diff object describing exactly what to change. Do not return the full dataset.
 
@@ -331,7 +346,9 @@ app.post(
     ].join('\n\n')
 
     const rawJson = await requestModelJson(GENERATE_SYSTEM_PROMPT, prompt)
-    const data = parseSandboxPayload(rawJson)
+    const data = parseSandboxPayload(rawJson, {
+      description,
+    })
     const sandbox = createSandboxRecord(description, data)
 
     const { error } = await supabase.from('sandboxes').insert(sandbox)

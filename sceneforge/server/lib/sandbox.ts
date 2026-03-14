@@ -20,6 +20,12 @@ export type TransactionRecord = {
   metadata: Record<string, unknown>
 }
 
+export type PrimaryEntityRecord = Record<string, unknown> & {
+  id: string
+  created_at?: string
+  status?: string
+}
+
 export type ActivityLogRecord = {
   id: string
   user_id: string
@@ -38,10 +44,15 @@ export type DashboardMetrics = {
 
 export type SandboxData = {
   users: UserRecord[]
+  primary_entities: PrimaryEntityRecord[]
   transactions: TransactionRecord[]
   activity_logs: ActivityLogRecord[]
   feature_flags: Record<string, boolean>
   dashboard_metrics: DashboardMetrics
+  schema_info: {
+    primary_entity_name: string
+    domain: string
+  }
 }
 
 type ArrayLimits = {
@@ -53,6 +64,7 @@ type ParseSandboxOptions = {
   userLimits?: ArrayLimits
   transactionLimits?: ArrayLimits
   activityLogLimits?: ArrayLimits
+  description?: string
 }
 
 type RawRecord = Record<string, unknown>
@@ -94,6 +106,42 @@ function asNumber(value: unknown, fallback: number): number {
 
 function asBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
+}
+
+function inferPrimaryEntityName(description: string): string {
+  const lowered = description.toLowerCase()
+
+  if (lowered.includes('ride') || lowered.includes('driver') || lowered.includes('rider')) {
+    return 'trips'
+  }
+
+  if (lowered.includes('hospital') || lowered.includes('doctor') || lowered.includes('patient')) {
+    return 'appointments'
+  }
+
+  if (lowered.includes('e-commerce') || lowered.includes('store') || lowered.includes('shopper') || lowered.includes('order')) {
+    return 'orders'
+  }
+
+  return 'records'
+}
+
+function inferDomain(description: string): string {
+  const lowered = description.toLowerCase()
+
+  if (lowered.includes('ride') || lowered.includes('driver') || lowered.includes('rider')) {
+    return 'ride sharing'
+  }
+
+  if (lowered.includes('hospital') || lowered.includes('doctor') || lowered.includes('patient')) {
+    return 'hospital'
+  }
+
+  if (lowered.includes('e-commerce') || lowered.includes('store') || lowered.includes('shopper') || lowered.includes('order')) {
+    return 'e-commerce'
+  }
+
+  return 'custom domain'
 }
 
 function ensureUuid(value: unknown): string {
@@ -182,6 +230,14 @@ function buildFallbackTransaction(index: number, users: UserRecord[], baseTime: 
   }
 }
 
+function buildFallbackPrimaryEntity(index: number, users: UserRecord[], baseTime: Date): PrimaryEntityRecord {
+  const transaction = buildFallbackTransaction(index, users, baseTime)
+
+  return {
+    ...transaction,
+  }
+}
+
 function normalizeTransactions(
   rawTransactions: unknown[],
   users: UserRecord[],
@@ -211,33 +267,60 @@ function normalizeTransactions(
   )
 }
 
-function buildFallbackLog(index: number, users: UserRecord[], transactions: TransactionRecord[], baseTime: Date): ActivityLogRecord {
+function normalizePrimaryEntities(
+  rawPrimaryEntities: unknown[],
+  users: UserRecord[],
+  baseTime: Date,
+  limits: ArrayLimits,
+): PrimaryEntityRecord[] {
+  const mapped = rawPrimaryEntities.map((value, index) => {
+    const record = asRecord(value)
+    const fallback = buildFallbackPrimaryEntity(index, users, baseTime)
+    const nextRecord: Record<string, unknown> = {
+      ...record,
+      id: ensureUuid(record.id),
+    }
+
+    if (!('created_at' in nextRecord) || typeof nextRecord.created_at !== 'string') {
+      nextRecord.created_at = fallback.created_at
+    }
+
+    return nextRecord as PrimaryEntityRecord
+  })
+
+  return clampArray(mapped, limits.minimum, limits.maximum, (index) =>
+    buildFallbackPrimaryEntity(index, users, baseTime),
+  )
+}
+
+function buildFallbackLog(index: number, users: UserRecord[], primaryEntities: PrimaryEntityRecord[], baseTime: Date): ActivityLogRecord {
   const user = users[index % users.length]
-  const transaction = transactions[index % transactions.length]
+  const primaryEntity = primaryEntities[index % primaryEntities.length]
+  const entityKind = typeof primaryEntity.type === 'string' ? primaryEntity.type : 'record'
 
   return {
     id: uuidv4(),
     user_id: user.id,
-    transaction_id: transaction.id,
+    transaction_id: primaryEntity.id,
     action: pick(DEFAULT_LOG_ACTIONS, index),
     timestamp: isoMinutesFrom(baseTime, index * 6),
-    details: `${user.name} triggered ${pick(DEFAULT_LOG_ACTIONS, index)} on ${transaction.type}.`,
+    details: `${user.name} triggered ${pick(DEFAULT_LOG_ACTIONS, index)} on ${entityKind}.`,
   }
 }
 
 function normalizeLogs(
   rawLogs: unknown[],
   users: UserRecord[],
-  transactions: TransactionRecord[],
+  primaryEntities: PrimaryEntityRecord[],
   baseTime: Date,
   limits: ArrayLimits,
 ): ActivityLogRecord[] {
   const userIds = new Set(users.map((user) => user.id))
-  const transactionIds = new Set(transactions.map((transaction) => transaction.id))
+  const transactionIds = new Set(primaryEntities.map((entity) => entity.id))
 
   const mapped = rawLogs.map((value, index) => {
     const record = asRecord(value)
-    const fallback = buildFallbackLog(index, users, transactions, baseTime)
+    const fallback = buildFallbackLog(index, users, primaryEntities, baseTime)
     const userId = typeof record.user_id === 'string' && userIds.has(record.user_id) ? record.user_id : fallback.user_id
     const transactionId =
       typeof record.transaction_id === 'string' && transactionIds.has(record.transaction_id)
@@ -255,11 +338,11 @@ function normalizeLogs(
   })
 
   return clampArray(mapped, limits.minimum, limits.maximum, (index) =>
-    buildFallbackLog(index, users, transactions, baseTime),
+    buildFallbackLog(index, users, primaryEntities, baseTime),
   )
     .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
     .map((log, index, logs) => {
-      const transaction = transactions.find((item) => item.id === log.transaction_id)
+      const transaction = primaryEntities.find((item) => item.id === log.transaction_id)
       const minimumTime = transaction ? new Date(transaction.created_at).getTime() : baseTime.getTime()
       const previousTime = index > 0 ? new Date(logs[index - 1].timestamp).getTime() + 60_000 : minimumTime
       const timestamp = new Date(Math.max(new Date(log.timestamp).getTime(), minimumTime, previousTime)).toISOString()
@@ -293,15 +376,31 @@ function normalizeFeatureFlags(rawFlags: unknown): Record<string, boolean> {
 
 function deriveDashboardMetrics(
   users: UserRecord[],
-  transactions: TransactionRecord[],
+  primaryEntities: PrimaryEntityRecord[],
   activityLogs: ActivityLogRecord[],
 ): DashboardMetrics {
-  const totalRevenue = transactions
-    .filter((transaction) => transaction.status !== 'failed')
-    .reduce((sum, transaction) => sum + transaction.amount, 0)
+  const totalRevenue = primaryEntities.reduce((sum, entity) => {
+    const amountCandidates = [
+      entity.amount,
+      entity.total_amount,
+      entity.fare,
+      entity.billing_amount,
+    ]
+    const amount = amountCandidates.find((value) => typeof value === 'number' && Number.isFinite(value))
+    const status = typeof entity.status === 'string' ? entity.status : ''
+
+    if (typeof amount === 'number' && !status.toLowerCase().includes('fail')) {
+      return sum + amount
+    }
+
+    return sum
+  }, 0)
 
   const activeUsers = users.filter((user) => user.status.toLowerCase() === 'active').length
-  const failedTransactions = transactions.filter((transaction) => transaction.status.toLowerCase().includes('fail')).length
+  const failedTransactions = primaryEntities.filter((entity) => {
+    const status = typeof entity.status === 'string' ? entity.status : ''
+    return status.toLowerCase().includes('fail')
+  }).length
   const suspiciousLogs = activityLogs.filter((log) =>
     /fail|conflict|anomaly|alert|suspicious/i.test(`${log.action} ${log.details}`),
   ).length
@@ -343,6 +442,7 @@ export function mergeSandboxData(existingData: SandboxData, nextData: SandboxDat
 
   return {
     users: mergedUsers,
+    primary_entities: [...nextData.primary_entities],
     transactions: mergedTransactions,
     activity_logs: mergedLogs.sort(
       (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
@@ -352,6 +452,7 @@ export function mergeSandboxData(existingData: SandboxData, nextData: SandboxDat
       ...nextData.feature_flags,
     },
     dashboard_metrics: nextData.dashboard_metrics,
+    schema_info: nextData.schema_info,
   }
 }
 
@@ -366,8 +467,18 @@ export function parseSandboxPayload(rawText: string, options?: ParseSandboxOptio
     new Date(baseTime.getTime() - 8 * 3_600_000),
     userLimits,
   )
+  const primaryEntities = normalizePrimaryEntities(
+    Array.isArray(parsed.primary_entities)
+      ? parsed.primary_entities
+      : Array.isArray(parsed.transactions)
+        ? parsed.transactions
+        : [],
+    users,
+    new Date(baseTime.getTime() - 6 * 3_600_000),
+    transactionLimits,
+  )
   const transactions = normalizeTransactions(
-    Array.isArray(parsed.transactions) ? parsed.transactions : [],
+    Array.isArray(parsed.transactions) ? parsed.transactions : primaryEntities,
     users,
     new Date(baseTime.getTime() - 6 * 3_600_000),
     transactionLimits,
@@ -375,18 +486,30 @@ export function parseSandboxPayload(rawText: string, options?: ParseSandboxOptio
   const activityLogs = normalizeLogs(
     Array.isArray(parsed.activity_logs) ? parsed.activity_logs : [],
     users,
-    transactions,
+    primaryEntities,
     new Date(baseTime.getTime() - 5 * 3_600_000),
     activityLogLimits,
   )
   const featureFlags = normalizeFeatureFlags(parsed.feature_flags)
+  const schemaInfoRecord = asRecord(parsed.schema_info)
+  const description = asString(parsed.description, options?.description ?? '')
+  const primaryEntityName = asString(
+    schemaInfoRecord.primary_entity_name,
+    inferPrimaryEntityName(description),
+  )
+  const domain = asString(schemaInfoRecord.domain, inferDomain(description))
 
   return {
     users,
+    primary_entities: primaryEntities,
     transactions,
     activity_logs: activityLogs,
     feature_flags: featureFlags,
-    dashboard_metrics: deriveDashboardMetrics(users, transactions, activityLogs),
+    dashboard_metrics: deriveDashboardMetrics(users, primaryEntities, activityLogs),
+    schema_info: {
+      primary_entity_name: primaryEntityName,
+      domain,
+    },
   }
 }
 

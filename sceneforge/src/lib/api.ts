@@ -17,6 +17,10 @@ export type TransactionRecord = {
   metadata: Record<string, unknown>
 }
 
+export type PrimaryEntityRecord = Record<string, unknown> & {
+  id: string
+}
+
 export type ActivityLogRecord = {
   id: string
   user_id: string
@@ -28,6 +32,7 @@ export type ActivityLogRecord = {
 
 export type SandboxData = {
   users: UserRecord[]
+  primary_entities: PrimaryEntityRecord[]
   transactions: TransactionRecord[]
   activity_logs: ActivityLogRecord[]
   feature_flags: Record<string, boolean>
@@ -36,6 +41,10 @@ export type SandboxData = {
     active_users: number
     failed_transactions: number
     anomaly_score: number
+  }
+  schema_info: {
+    primary_entity_name: string
+    domain: string
   }
 }
 

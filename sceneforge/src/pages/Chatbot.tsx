@@ -6,8 +6,8 @@ import {
   getSandbox,
   saveTemplate,
   type ActivityLogRecord,
+  type PrimaryEntityRecord,
   type SandboxResponse,
-  type TransactionRecord,
   type UserRecord,
 } from '../lib/api'
 import './Chatbot.css'
@@ -20,14 +20,7 @@ const examplePrompts = [
 ]
 
 const chaosTypes = ['failed_payment', 'permission_conflict', 'data_anomaly'] as const
-const tabs = [
-  { id: 'users', label: 'Users' },
-  { id: 'transactions', label: 'Transactions' },
-  { id: 'activity_logs', label: 'Activity Logs' },
-  { id: 'feature_flags', label: 'Feature Flags' },
-] as const
-
-type TabId = (typeof tabs)[number]['id']
+type TabId = 'users' | 'primary_entities' | 'activity_logs' | 'feature_flags'
 type LoadedSandboxData = NonNullable<SandboxResponse['data']>
 type ChaosHighlights = {
   chaosSummary: string
@@ -73,6 +66,15 @@ function formatDate(value: string): string {
   }
 
   return parsed.toLocaleString()
+}
+
+function capitalizeLabel(value: string): string {
+  return value
+    .trim()
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function getOrderedColumns(rows: TableRow[]): string[] {
@@ -278,11 +280,18 @@ function renderUsersTable(users: UserRecord[], changedIds: string[]) {
   return renderDataTable(users as unknown as TableRow[], changedIds)
 }
 
-function renderTransactionsTable(transactions: TransactionRecord[], changedIds: string[]) {
+function renderPrimaryEntitiesTable(primaryEntities: PrimaryEntityRecord[], changedIds: string[]) {
   return renderDataTable(
-    transactions.map((transaction) => ({
-      ...transaction,
-      amount: `$${transaction.amount.toFixed(2)}`,
+    primaryEntities.map((entity) => ({
+      ...entity,
+      amount: typeof entity.amount === 'number' ? `$${entity.amount.toFixed(2)}` : entity.amount,
+      total_amount:
+        typeof entity.total_amount === 'number' ? `$${entity.total_amount.toFixed(2)}` : entity.total_amount,
+      fare: typeof entity.fare === 'number' ? `$${entity.fare.toFixed(2)}` : entity.fare,
+      billing_amount:
+        typeof entity.billing_amount === 'number'
+          ? `$${entity.billing_amount.toFixed(2)}`
+          : entity.billing_amount,
     })) as TableRow[],
     changedIds,
   )
@@ -320,6 +329,7 @@ const Chatbot: React.FC = () => {
   const [chaosHighlights, setChaosHighlights] = useState<ChaosHighlights | null>(null)
   const [changedRowIds, setChangedRowIds] = useState<string[]>([])
   const [changedFeatureFlags, setChangedFeatureFlags] = useState<string[]>([])
+  const [primaryEntityTabLabel, setPrimaryEntityTabLabel] = useState('Transactions')
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -346,6 +356,7 @@ const Chatbot: React.FC = () => {
       try {
         const restoredSandbox = await getSandbox(sandboxId)
         setSandbox(restoredSandbox)
+        setPrimaryEntityTabLabel(capitalizeLabel(restoredSandbox.data.schema_info?.primary_entity_name || 'transactions'))
         setChaosHighlights(null)
         setChangedRowIds([])
         setChangedFeatureFlags([])
@@ -391,6 +402,11 @@ const Chatbot: React.FC = () => {
 
     return {
       users: Array.isArray(sandbox.data.users) ? sandbox.data.users : [],
+      primary_entities: Array.isArray(sandbox.data.primary_entities)
+        ? sandbox.data.primary_entities
+        : Array.isArray(sandbox.data.transactions)
+          ? (sandbox.data.transactions as unknown as PrimaryEntityRecord[])
+          : [],
       transactions: Array.isArray(sandbox.data.transactions) ? sandbox.data.transactions : [],
       activity_logs: Array.isArray(sandbox.data.activity_logs) ? sandbox.data.activity_logs : [],
       feature_flags:
@@ -398,6 +414,10 @@ const Chatbot: React.FC = () => {
           ? sandbox.data.feature_flags
           : {},
       dashboard_metrics: sandbox.data.dashboard_metrics,
+      schema_info: sandbox.data.schema_info ?? {
+        primary_entity_name: 'transactions',
+        domain: 'custom domain',
+      },
     }
   }, [sandbox])
   const metrics = sandboxData?.dashboard_metrics
@@ -405,7 +425,7 @@ const Chatbot: React.FC = () => {
   const tabChangeCounts = useMemo(
     () => ({
       users: chaosHighlights?.userChanges ?? 0,
-      transactions: chaosHighlights?.transactionChanges ?? 0,
+      primary_entities: chaosHighlights?.transactionChanges ?? 0,
       activity_logs: chaosHighlights?.activityLogChanges ?? 0,
       feature_flags: chaosHighlights?.featureFlagChanges ?? 0,
     }),
@@ -420,8 +440,8 @@ const Chatbot: React.FC = () => {
     switch (activeTab) {
       case 'users':
         return renderUsersTable(sandboxData.users, Array.from(changedRowIdSet))
-      case 'transactions':
-        return renderTransactionsTable(sandboxData.transactions, Array.from(changedRowIdSet))
+      case 'primary_entities':
+        return renderPrimaryEntitiesTable(sandboxData.primary_entities, Array.from(changedRowIdSet))
       case 'activity_logs':
         return renderActivityLogsTable(sandboxData.activity_logs, Array.from(changedRowIdSet))
       case 'feature_flags':
@@ -449,6 +469,7 @@ const Chatbot: React.FC = () => {
     try {
       const result = await generateSandbox(description)
       setSandbox(result)
+      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'transactions'))
       setActiveTab('users')
       setPreviousPrompts(savePromptToStorage(description, result.sandbox_id))
       setSandboxUrl(result.sandbox_id)
@@ -475,7 +496,7 @@ const Chatbot: React.FC = () => {
       const highlightIds = Array.from(new Set(result.changedIds))
       const changedIdSet = new Set(highlightIds)
       const changedUsers = result.data.users.filter((row) => changedIdSet.has(row.id)).length
-      const changedTransactions = result.data.transactions.filter((row) => changedIdSet.has(row.id)).length
+      const changedTransactions = result.data.primary_entities.filter((row) => changedIdSet.has(row.id)).length
       const changedActivityLogs = result.data.activity_logs.filter((row) => changedIdSet.has(row.id)).length
       const nextHighlights = createChaosHighlights(
         changedUsers,
@@ -485,6 +506,7 @@ const Chatbot: React.FC = () => {
         result.chaos_summary,
       )
       setSandbox(result)
+      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'transactions'))
       setChaosHighlights(nextHighlights)
       setChangedRowIds(highlightIds)
       setChangedFeatureFlags([])
@@ -629,7 +651,7 @@ const Chatbot: React.FC = () => {
               <p className="workspace-subtitle">
                 {isHydratingSandbox
                   ? 'Loading saved sandbox data from the shareable URL.'
-                  : 'Generating coherent users, transactions, activity logs, and flags from your prompt.'}
+                  : 'Generating coherent users, domain-specific records, activity logs, and flags from your prompt.'}
               </p>
             </div>
           ) : sandboxData ? (
@@ -659,7 +681,12 @@ const Chatbot: React.FC = () => {
                 ) : null}
 
                 <div className="tab-row">
-                  {tabs.map((tab) => (
+                  {[
+                    { id: 'users' as const, label: 'Users' },
+                    { id: 'primary_entities' as const, label: primaryEntityTabLabel },
+                    { id: 'activity_logs' as const, label: 'Activity Logs' },
+                    { id: 'feature_flags' as const, label: 'Feature Flags' },
+                  ].map((tab) => (
                     <button
                       key={tab.id}
                       type="button"
