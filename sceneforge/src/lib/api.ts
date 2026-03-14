@@ -44,6 +44,11 @@ export type SandboxResponse = {
   data: SandboxData
 }
 
+export type ChaosResponse = SandboxResponse & {
+  changedIds: string[]
+  chaos_summary: string
+}
+
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001'
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -75,7 +80,7 @@ export function generateSandbox(description: string) {
 }
 
 export function applyChaos(sandboxId: string, chaosType: string) {
-  return apiRequest<SandboxResponse & { chaos_applied: string }>('/api/chaos', {
+  return apiRequest<ChaosResponse>('/api/chaos', {
     method: 'POST',
     body: JSON.stringify({
       sandbox_id: sandboxId,

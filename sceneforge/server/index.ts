@@ -6,9 +6,11 @@ import OpenAI from 'openai'
 import {
   createSandboxRecord,
   createTemplateRecord,
-  mergeSandboxData,
   parseSandboxPayload,
+  type ActivityLogRecord,
   type SandboxData,
+  type TransactionRecord,
+  type UserRecord,
 } from './lib/sandbox.ts'
 import { supabase } from './lib/supabase.ts'
 
@@ -28,32 +30,24 @@ The JSON must contain:
 
 CRITICAL: Every foreign key reference must be valid. user_id in transactions must be a real user id. transaction_id in activity_logs must be a real transaction id. Timestamps must be chronologically coherent. The data must tell a consistent story.`
 
-const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. You will receive a complete sandbox dataset and a chaos type. Return the ENTIRE mutated dataset as pure JSON — same structure, every field, nothing omitted.
+const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. Given a sandbox dataset and a chaos type, return ONLY a JSON diff object describing exactly what to change. Do not return the full dataset.
 
-For chaos_type "failed_payment":
-- Find 1-2 completed transactions and change their status to "failed"
-- Add metadata: {"reason": "insufficient_funds", "chaos_injected": true} to those transactions
-- When a payment fails, you MUST find the user whose id matches the failed transaction's user_id and change that user's status field from "active" to "payment_suspended". This is mandatory, not optional.
-- Add 2-3 new activity_log entries referencing the real failed transaction IDs and real user IDs
-- When adding new activity_log entries during chaos, you MUST use an existing transaction id from the transactions array — specifically the transaction you just marked as failed. Never invent new transaction IDs for chaos log entries.
-- Update dashboard_metrics: increase failed_transactions count, increase anomaly_score significantly
+Return this structure:
+{
+  "chaos_summary": "brief description of what happened",
+  "mutations": {
+    "users": [{ "id": "existing_user_id", "changes": { "status": "payment_suspended" } }],
+    "transactions": [{ "id": "existing_transaction_id", "changes": { "status": "failed", "metadata": {"reason": "insufficient_funds", "chaos_injected": true} } }],
+    "activity_logs": [{ "id": "NEW_UUID", "isNew": true, "data": { ...complete new log entry with real user_id and transaction_id } }],
+    "dashboard_metrics": { "failed_transactions": 4, "anomaly_score": 8.7 }
+  }
+}
 
-For chaos_type "permission_conflict":
-- Change one non-admin user's role to a conflicting value
-- Add activity_log entries showing unauthorized access attempts using real user IDs
-- Flag 1-2 transactions from that user as "under_review"
-- Update dashboard_metrics: increase anomaly_score
-
-For chaos_type "data_anomaly":
-- Introduce 2-3 transactions with suspicious amounts or duplicate IDs
-- Add activity_log entries flagging the anomaly with real references
-- Update dashboard_metrics: set anomaly_score above 8.0, increase failed_transactions
-
-CRITICAL RULES:
-- Return the complete dataset with ALL existing data plus mutations — never drop existing records
-- Every new activity_log entry MUST reference a real user_id and real transaction_id from the dataset
-- Mutations must appear in users, transactions, activity_logs, AND dashboard_metrics simultaneously
-- Never return partial data`
+RULES:
+- For existing records: only include the id and the specific fields that need to change
+- For new records: set isNew: true and provide the complete record
+- Every new activity_log must use a real user_id and real transaction_id from the dataset
+- Minimum mutations only — touch nothing that doesn't need to change`
 
 type MemoryRow = {
   id: string
@@ -68,6 +62,28 @@ type SandboxRow = {
   data: SandboxData
   created_at: string
   expires_at: string
+}
+
+type ChaosMutation<TChanges> = {
+  id: string
+  changes?: Partial<TChanges>
+}
+
+type ChaosLogMutation = {
+  id: string
+  isNew?: boolean
+  data?: ActivityLogRecord
+  changes?: Partial<ActivityLogRecord>
+}
+
+type ChaosDiff = {
+  chaos_summary?: string
+  mutations?: {
+    users?: Array<ChaosMutation<UserRecord>>
+    transactions?: Array<ChaosMutation<TransactionRecord>>
+    activity_logs?: ChaosLogMutation[]
+    dashboard_metrics?: Partial<SandboxData['dashboard_metrics']>
+  }
 }
 
 app.use(cors())
@@ -178,20 +194,62 @@ async function requestModelJson(systemPrompt: string, prompt: string): Promise<s
   return text
 }
 
-function getChaosParseOptions(existingData: SandboxData) {
+function parseChaosDiff(rawText: string): ChaosDiff {
+  return JSON.parse(rawText.trim()) as ChaosDiff
+}
+
+function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
+  const mutatedData = JSON.parse(JSON.stringify(originalData)) as SandboxData
+  const changedIds = new Set<string>()
+  const userIds = new Set(mutatedData.users.map((user) => user.id))
+  const transactionIds = new Set(mutatedData.transactions.map((transaction) => transaction.id))
+  const mutations = diff.mutations
+
+  mutations?.users?.forEach((mutation) => {
+    const user = mutatedData.users.find((item) => item.id === mutation.id)
+    if (user && mutation.changes) {
+      Object.assign(user, mutation.changes)
+      changedIds.add(user.id)
+    }
+  })
+
+  mutations?.transactions?.forEach((mutation) => {
+    const transaction = mutatedData.transactions.find((item) => item.id === mutation.id)
+    if (transaction && mutation.changes) {
+      Object.assign(transaction, mutation.changes)
+      changedIds.add(transaction.id)
+    }
+  })
+
+  mutations?.activity_logs?.forEach((mutation) => {
+    if (mutation.isNew && mutation.data) {
+      const log = mutation.data
+      if (userIds.has(log.user_id) && transactionIds.has(log.transaction_id)) {
+        mutatedData.activity_logs.push(log)
+        changedIds.add(log.id)
+      }
+      return
+    }
+
+    const existingLog = mutatedData.activity_logs.find((item) => item.id === mutation.id)
+    if (existingLog && mutation.changes) {
+      Object.assign(existingLog, mutation.changes)
+      changedIds.add(existingLog.id)
+    }
+  })
+
+  if (mutations?.dashboard_metrics) {
+    Object.assign(mutatedData.dashboard_metrics, mutations.dashboard_metrics)
+  }
+
+  mutatedData.activity_logs.sort(
+    (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
+  )
+
   return {
-    userLimits: {
-      minimum: existingData.users.length,
-      maximum: Math.max(existingData.users.length + 2, 6),
-    },
-    transactionLimits: {
-      minimum: existingData.transactions.length,
-      maximum: Math.max(existingData.transactions.length + 3, 18),
-    },
-    activityLogLimits: {
-      minimum: existingData.activity_logs.length,
-      maximum: Math.max(existingData.activity_logs.length + 3, 24),
-    },
+    mutatedData,
+    changedIds: Array.from(changedIds),
+    chaos_summary: diff.chaos_summary ?? 'Chaos injected.',
   }
 }
 
@@ -269,18 +327,17 @@ app.post(
       `Chaos type: ${chaosType}`,
       `Current sandbox description: ${sandbox.description}`,
       `Current sandbox data: ${JSON.stringify(sandbox.data)}`,
-      'Preserve every existing record and field while applying the required mutations.',
       'Return only raw JSON.',
     ].join('\n\n')
 
     const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
-    const parsedData = parseSandboxPayload(rawJson, getChaosParseOptions(sandbox.data))
-    const data = mergeSandboxData(sandbox.data, parsedData)
+    const diff = parseChaosDiff(rawJson)
+    const { mutatedData, changedIds, chaos_summary } = applyChaosDiff(sandbox.data, diff)
 
     const { error } = await supabase
       .from('sandboxes')
       .update({
-        data,
+        data: mutatedData,
       })
       .eq('id', sandboxId)
 
@@ -290,8 +347,9 @@ app.post(
 
     response.json({
       sandbox_id: sandboxId,
-      data,
-      chaos_applied: chaosType,
+      data: mutatedData,
+      changedIds,
+      chaos_summary,
     })
   }),
 )
