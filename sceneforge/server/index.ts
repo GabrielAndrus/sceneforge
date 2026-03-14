@@ -490,6 +490,26 @@ app.post(
 )
 
 app.get(
+  '/api/sandboxes',
+  asyncRoute(async (_request, response) => {
+    ensureSupabaseEnv()
+    const { data, error } = await supabase
+      .from('sandboxes')
+      .select('id, description, created_at')
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    if (error) {
+      throw error
+    }
+
+    response.json({
+      sandboxes: (data ?? []) as Array<Pick<SandboxRow, 'id' | 'description' | 'created_at'>>,
+    })
+  }),
+)
+
+app.get(
   '/api/templates',
   asyncRoute(async (_request, response) => {
     ensureSupabaseEnv()
@@ -497,6 +517,7 @@ app.get(
       .from('templates')
       .select('id, name, description, created_at')
       .order('created_at', { ascending: false })
+      .limit(20)
 
     if (error) {
       throw error
@@ -611,6 +632,25 @@ app.get(
     const sandbox = await getSandboxById(sandboxId)
 
     response.json(sandbox)
+  }),
+)
+
+app.delete(
+  '/api/sandbox/:id',
+  asyncRoute(async (request, response) => {
+    ensureSupabaseEnv()
+    const sandboxId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id
+
+    const { error } = await supabase
+      .from('sandboxes')
+      .delete()
+      .eq('id', sandboxId)
+
+    if (error) {
+      throw error
+    }
+
+    response.json({ success: true })
   }),
 )
 

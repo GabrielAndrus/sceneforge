@@ -80,6 +80,12 @@
   font-size: 14px;
 }
 
+.history-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .history-item:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-primary);
@@ -95,6 +101,24 @@
   color: inherit;
   font-size: 14px;
   text-align: left;
+}
+
+.history-delete-btn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.48);
+  background: transparent;
+  transition: all 0.2s ease;
+}
+
+.history-delete-btn:hover {
+  color: #ffb6b6;
+  background: rgba(255, 92, 92, 0.12);
 }
 
 .history-text {

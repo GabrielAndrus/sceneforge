@@ -2,13 +2,16 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
   applyChaos,
+  deleteSandboxRecord,
   generateFromTemplate,
   generateSandbox,
   getSandbox,
+  getSandboxes,
   getTemplates,
   saveTemplate,
   type ActivityLogRecord,
   type PrimaryEntityRecord,
+  type SandboxSummary,
   type SandboxResponse,
   type TemplateSummary,
   type UserRecord,
@@ -41,7 +44,7 @@ type PreviousPromptItem = {
 }
 type TableRow = Record<string, unknown>
 
-const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge_prompts'
+const TEMPLATE_CACHE_STORAGE_KEY = 'sceneforge_templates_cache'
 const PINNED_COLUMNS = [
   'id',
   'user_id',
@@ -282,89 +285,53 @@ function clearSandboxUrl() {
   window.history.replaceState({}, '', '/chat')
 }
 
-function normalizeStoredPrompt(item: unknown, index: number): PreviousPromptItem | null {
-  if (typeof item === 'string' && item.trim()) {
-    return {
-      prompt: item.trim(),
-      sandbox_id: '',
-      timestamp: Date.now() - index,
-    }
-  }
-
-  if (item && typeof item === 'object') {
-    const record = item as Record<string, unknown>
-    const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : ''
-    if (!prompt) {
-      return null
-    }
-
-    return {
-      prompt,
-      sandbox_id: typeof record.sandbox_id === 'string' ? record.sandbox_id.trim() : '',
-      timestamp:
-        typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)
-          ? record.timestamp
-          : Date.now() - index,
-    }
-  }
-
-  return null
+function mapSandboxesToPromptItems(items: SandboxSummary[]): PreviousPromptItem[] {
+  return items.map((item, index) => ({
+    prompt: item.description,
+    sandbox_id: item.id,
+    timestamp: Number.isFinite(Date.parse(item.created_at))
+      ? Date.parse(item.created_at)
+      : Date.now() - index,
+  }))
 }
 
-function readStoredPrompts(): PreviousPromptItem[] {
+function readCachedTemplates(): TemplateSummary[] {
   if (typeof window === 'undefined') {
     return []
   }
 
   try {
-    const raw = window.localStorage.getItem(PREVIOUS_PROMPTS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(TEMPLATE_CACHE_STORAGE_KEY)
     if (!raw) {
       return []
     }
 
     const parsed = JSON.parse(raw) as unknown
-    const normalized = Array.isArray(parsed)
-      ? parsed
-          .map((item, index) => normalizeStoredPrompt(item, index))
-          .filter((item): item is PreviousPromptItem => item !== null)
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is TemplateSummary => {
+          const record = item as Record<string, unknown>
+          return (
+            typeof record.id === 'string' &&
+            typeof record.name === 'string' &&
+            typeof record.description === 'string' &&
+            typeof record.created_at === 'string'
+          )
+        })
       : []
-
-    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(normalized))
-    return normalized
   } catch {
     return []
   }
 }
 
-function savePromptToStorage(prompt: string, sandboxId: string): PreviousPromptItem[] {
+function writeCachedTemplates(templates: TemplateSummary[]) {
   if (typeof window === 'undefined') {
-    return [{ prompt, sandbox_id: sandboxId, timestamp: Date.now() }]
+    return
   }
 
   try {
-    const existing = readStoredPrompts().filter((item) => item.sandbox_id !== sandboxId)
-    const nextPrompts: PreviousPromptItem[] = [
-      {
-        prompt,
-        sandbox_id: sandboxId,
-        timestamp: Date.now(),
-      },
-      ...existing,
-    ]
-    const limitedPrompts = nextPrompts.slice(0, 20)
-    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(limitedPrompts))
-
-    return limitedPrompts
+    window.localStorage.setItem(TEMPLATE_CACHE_STORAGE_KEY, JSON.stringify(templates))
   } catch {
-    const fallbackPrompts: PreviousPromptItem[] = [
-      {
-        prompt,
-        sandbox_id: sandboxId,
-        timestamp: Date.now(),
-      },
-    ]
-    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(fallbackPrompts))
-    return fallbackPrompts
+    return
   }
 }
 
@@ -410,6 +377,7 @@ const Chatbot: React.FC = () => {
   const [changedFeatureFlags, setChangedFeatureFlags] = useState<string[]>([])
   const [primaryEntityTabLabel, setPrimaryEntityTabLabel] = useState('Records')
   const [templates, setTemplates] = useState<TemplateSummary[]>([])
+  const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false)
   const [isLaunchingTemplateId, setIsLaunchingTemplateId] = useState<string | null>(null)
   const [isTemplateFormOpen, setIsTemplateFormOpen] = useState(false)
@@ -430,7 +398,7 @@ const Chatbot: React.FC = () => {
   }, [chaosIndicator])
 
   useEffect(() => {
-    setPreviousPrompts(readStoredPrompts())
+    setTemplates(readCachedTemplates())
   }, [])
 
   useEffect(() => {
@@ -457,22 +425,30 @@ const Chatbot: React.FC = () => {
     return () => window.clearTimeout(timeoutId)
   }, [isChaosButtonFlashing])
 
-  const loadTemplates = useCallback(async () => {
+  const loadSidebarData = useCallback(async () => {
+    setIsLoadingPrompts(true)
     setIsLoadingTemplates(true)
 
     try {
-      const nextTemplates = await getTemplates()
+      const [nextSandboxes, nextTemplates] = await Promise.all([
+        getSandboxes(),
+        getTemplates(),
+      ])
+
+      setPreviousPrompts(mapSandboxesToPromptItems(nextSandboxes))
       setTemplates(nextTemplates)
+      writeCachedTemplates(nextTemplates)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
+      setIsLoadingPrompts(false)
       setIsLoadingTemplates(false)
     }
   }, [])
 
   useEffect(() => {
-    void loadTemplates()
-  }, [loadTemplates])
+    void loadSidebarData()
+  }, [loadSidebarData])
 
   const restoreSandbox = useCallback(
     async (sandboxId: string, promptText?: string) => {
@@ -608,7 +584,10 @@ const Chatbot: React.FC = () => {
       setSandbox(result)
       setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setActiveTab('users')
-      setPreviousPrompts(savePromptToStorage(description, result.sandbox_id))
+      setPreviousPrompts((current) => [
+        { prompt: description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
+        ...current.filter((item) => item.sandbox_id !== result.sandbox_id),
+      ].slice(0, 20))
       setSandboxUrl(result.sandbox_id)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
@@ -684,7 +663,7 @@ const Chatbot: React.FC = () => {
       setStatusMessage('Template saved')
       setIsTemplateFormOpen(false)
       setTemplateName('')
-      await loadTemplates()
+      await loadSidebarData()
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
@@ -715,12 +694,37 @@ const Chatbot: React.FC = () => {
       setActiveTab('users')
       setSandboxUrl(result.sandbox_id)
       setStatusMessage(`Template launched: ${template.name}`)
-      setPreviousPrompts(savePromptToStorage(template.description, result.sandbox_id))
+      setPreviousPrompts((current) => [
+        { prompt: template.description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
+        ...current.filter((item) => item.sandbox_id !== result.sandbox_id),
+      ].slice(0, 20))
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
       setIsLaunchingTemplateId(null)
       setIsGenerating(false)
+    }
+  }
+
+  async function handleDeletePrompt(prompt: PreviousPromptItem) {
+    if (!prompt.sandbox_id) {
+      return
+    }
+
+    setErrorMessage(null)
+    setStatusMessage(null)
+
+    try {
+      await deleteSandboxRecord(prompt.sandbox_id)
+      setPreviousPrompts((current) => current.filter((item) => item.sandbox_id !== prompt.sandbox_id))
+
+      if (sandbox?.sandbox_id === prompt.sandbox_id) {
+        handleReset()
+      }
+
+      setStatusMessage('Sandbox deleted')
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
     }
   }
 
@@ -761,29 +765,47 @@ const Chatbot: React.FC = () => {
         <div className="history-section">
           <h3>Previous Prompts</h3>
           <ul className="history-list">
-            {previousPrompts.length === 0 ? (
+            {isLoadingPrompts && previousPrompts.length === 0 ? (
+              <li className="history-empty">Loading recent sandboxes...</li>
+            ) : previousPrompts.length === 0 ? (
               <li className="history-empty">Generated prompts will appear here.</li>
             ) : (
               previousPrompts.map((prompt, index) => (
                 <li key={`${prompt.sandbox_id || prompt.prompt}-${index}`} className="history-item">
-                  <button
-                    type="button"
-                    className="history-button"
-                    onClick={() => {
-                      if (!prompt.sandbox_id) {
-                        setInputText(prompt.prompt)
-                        setErrorMessage('This saved prompt cannot restore a sandbox yet. Generate it again to save a restorable record.')
-                        return
-                      }
+                  <div className="history-entry">
+                    <button
+                      type="button"
+                      className="history-button"
+                      onClick={() => {
+                        if (!prompt.sandbox_id) {
+                          setInputText(prompt.prompt)
+                          setErrorMessage('This saved prompt cannot restore a sandbox yet. Generate it again to save a restorable record.')
+                          return
+                        }
 
-                      void restoreSandbox(prompt.sandbox_id, prompt.prompt)
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                    <span className="history-text">{prompt.prompt}</span>
-                  </button>
+                        void restoreSandbox(prompt.sandbox_id, prompt.prompt)
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                      <span className="history-text">{prompt.prompt}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="history-delete-btn"
+                      onClick={() => void handleDeletePrompt(prompt)}
+                      aria-label={`Delete sandbox ${prompt.prompt}`}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6l-1 14H6L5 6"></path>
+                        <path d="M10 11v6"></path>
+                        <path d="M14 11v6"></path>
+                        <path d="M9 6V4h6v2"></path>
+                      </svg>
+                    </button>
+                  </div>
                 </li>
               ))
             )}
@@ -792,7 +814,7 @@ const Chatbot: React.FC = () => {
           <div className="templates-section">
             <h3>Templates</h3>
             <ul className="history-list">
-              {isLoadingTemplates ? (
+              {isLoadingTemplates && templates.length === 0 ? (
                 <li className="history-empty">Loading templates...</li>
               ) : templates.length === 0 ? (
                 <li className="history-empty">Saved templates will appear here.</li>
