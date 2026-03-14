@@ -319,6 +319,7 @@ const Chatbot: React.FC = () => {
   const [isHydratingSandbox, setIsHydratingSandbox] = useState(false)
   const [isApplyingChaos, setIsApplyingChaos] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
+  const [isDbModalOpen, setIsDbModalOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [chaosIndicator, setChaosIndicator] = useState<string | null>(null)
