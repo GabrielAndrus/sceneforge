@@ -402,12 +402,8 @@ const Chatbot: React.FC = () => {
 
     return {
       users: Array.isArray(sandbox.data.users) ? sandbox.data.users : [],
-      primary_entities: Array.isArray(sandbox.data.primary_entities)
-        ? sandbox.data.primary_entities
-        : Array.isArray(sandbox.data.transactions)
-          ? (sandbox.data.transactions as unknown as PrimaryEntityRecord[])
-          : [],
-      transactions: Array.isArray(sandbox.data.transactions) ? sandbox.data.transactions : [],
+      primary_entities: Array.isArray(sandbox.data.primary_entities) ? sandbox.data.primary_entities : [],
+      transactions: [],
       activity_logs: Array.isArray(sandbox.data.activity_logs) ? sandbox.data.activity_logs : [],
       feature_flags:
         sandbox.data.feature_flags && typeof sandbox.data.feature_flags === 'object'

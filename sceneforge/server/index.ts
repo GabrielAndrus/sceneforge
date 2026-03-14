@@ -20,16 +20,13 @@ const port = Number(process.env.PORT ?? 3001)
 const MODEL = 'gpt-4o'
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
 
-const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine. Generate a realistic, internally consistent sandbox environment as pure JSON with no markdown, no explanation, no code blocks — just raw JSON.
+const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine.
 
-Based on the user's description, infer the most appropriate entity types and field names for their domain. Do not always use "transactions" or "activity_logs" — use domain-specific names.
+Return pure JSON only. No markdown, no explanation, no code fences.
 
-For example:
-- Ride sharing app -> trips (with fields: id, driver_id, rider_id, origin, destination, distance_km, fare, status, surge_multiplier, rating, created_at)
-- Hospital -> appointments (with fields: id, patient_id, doctor_id, type, diagnosis, duration_mins, billing_amount, insurance_verified, status, created_at)
-- E-commerce -> orders (with fields: id, customer_id, items, total_amount, discount_code, shipping_status, created_at)
+Based on the user's description, infer the most appropriate domain, entity types, relationships, and field names for that domain.
 
-Always return this structure:
+Always return this top-level structure:
 {
   "users": [...],
   "primary_entities": [...],
@@ -37,14 +34,21 @@ Always return this structure:
   "feature_flags": {},
   "dashboard_metrics": {},
   "schema_info": {
-    "primary_entity_name": "trips",
-    "domain": "ride sharing"
+    "primary_entity_name": "human readable plural label for the main records",
+    "domain": "short domain description"
   }
 }
 
-Generate field names that make sense for the described domain. Be creative and specific.
-
-CRITICAL: Every foreign key reference must be valid. user_id in activity_logs must be a real user id. transaction_id in activity_logs must point to a real id from primary_entities. Timestamps must be chronologically coherent. The data must tell a consistent story.`
+Rules:
+- Keep "users" as the people, accounts, operators, customers, staff, or actors relevant to the scenario.
+- Put the domain's main business records in "primary_entities" and choose field names that feel natural for that domain.
+- Use "schema_info.primary_entity_name" to name those records for the UI.
+- Keep the audit trail chronological and make sure it references real ids from "users" and real ids from "primary_entities".
+- Make "feature_flags" and "dashboard_metrics" appropriate for the domain and consistent with the generated records.
+- Every foreign key reference must be valid.
+- Timestamps must be chronologically coherent.
+- Avoid generic schemas unless the user's prompt clearly calls for them.
+- Be creative, specific, and domain-appropriate.`
 
 const CHAOS_SYSTEM_PROMPT = `You are a chaos injection engine. Given a sandbox dataset and a chaos type, return ONLY a JSON diff object describing exactly what to change. Do not return the full dataset.
 

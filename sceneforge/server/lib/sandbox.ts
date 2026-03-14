@@ -468,17 +468,13 @@ export function parseSandboxPayload(rawText: string, options?: ParseSandboxOptio
     userLimits,
   )
   const primaryEntities = normalizePrimaryEntities(
-    Array.isArray(parsed.primary_entities)
-      ? parsed.primary_entities
-      : Array.isArray(parsed.transactions)
-        ? parsed.transactions
-        : [],
+    Array.isArray(parsed.primary_entities) ? parsed.primary_entities : [],
     users,
     new Date(baseTime.getTime() - 6 * 3_600_000),
     transactionLimits,
   )
   const transactions = normalizeTransactions(
-    Array.isArray(parsed.transactions) ? parsed.transactions : primaryEntities,
+    primaryEntities,
     users,
     new Date(baseTime.getTime() - 6 * 3_600_000),
     transactionLimits,

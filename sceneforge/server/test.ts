@@ -17,7 +17,7 @@ type ActivityLogRecord = {
 
 type SandboxData = {
   users: UserRecord[]
-  transactions: TransactionRecord[]
+  primary_entities: TransactionRecord[]
   activity_logs: ActivityLogRecord[]
   dashboard_metrics: {
     anomaly_score: number
@@ -86,18 +86,18 @@ async function main() {
   console.log(`sandbox_id: ${generated.sandbox_id}`)
 
   const userIds = new Set(generated.data.users.map((user) => user.id))
-  const transactionIds = new Set(generated.data.transactions.map((transaction) => transaction.id))
+  const transactionIds = new Set(generated.data.primary_entities.map((transaction) => transaction.id))
 
   check(
     'Every transaction.user_id exists in users',
-    generated.data.transactions.every((transaction) => userIds.has(transaction.user_id)),
+    generated.data.primary_entities.every((transaction) => userIds.has(transaction.user_id)),
   )
   check(
     'Every activity_log.user_id exists in users',
     generated.data.activity_logs.every((log) => userIds.has(log.user_id)),
   )
   check(
-    'Every activity_log.transaction_id exists in transactions',
+    'Every activity_log.transaction_id exists in primary_entities',
     generated.data.activity_logs.every((log) => transactionIds.has(log.transaction_id)),
   )
 
@@ -113,7 +113,7 @@ async function main() {
     }),
   })
 
-  const failedTransactions = chaos.data.transactions.filter((transaction) => transaction.status === 'failed')
+  const failedTransactions = chaos.data.primary_entities.filter((transaction) => transaction.status === 'failed')
   const failedTransactionIds = new Set(failedTransactions.map((transaction) => transaction.id))
   const changedUsers = chaos.data.users.filter(
     (user) => beforeUserStatusById.get(user.id) !== undefined && beforeUserStatusById.get(user.id) !== user.status,
