@@ -13,7 +13,7 @@ import { supabase } from './lib/supabase.ts'
 
 const app = express()
 const port = Number(process.env.PORT ?? 3001)
-const MODEL = 'gemini-1.5-pro'
+const MODEL = 'gemini-2.0-flash'
 const DEFAULT_PRODUCT_CONTEXT = 'SceneForge is an AI-powered sandbox environment generator for demos and QA.'
 
 const GENERATE_SYSTEM_PROMPT = `You are a synthetic data engine. Generate a realistic, internally consistent sandbox environment as pure JSON with no markdown, no explanation, no code blocks — just raw JSON.
