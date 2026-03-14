@@ -9,8 +9,8 @@ import {
   createTemplateRecord,
   parseSandboxPayload,
   type ActivityLogRecord,
+  type PrimaryEntityRecord,
   type SandboxData,
-  type TransactionRecord,
   type UserRecord,
 } from './lib/sandbox.ts'
 import { supabase } from './lib/supabase.ts'
@@ -57,9 +57,9 @@ Return this structure:
   "chaos_summary": "brief description of what happened",
   "mutations": {
     "users": [{ "id": "existing_user_id", "changes": { "status": "payment_suspended" } }],
-    "transactions": [{ "id": "existing_transaction_id", "changes": { "status": "failed", "metadata": {"reason": "insufficient_funds", "chaos_injected": true} } }],
-    "activity_logs": [{ "id": "NEW_UUID", "isNew": true, "data": { ...complete new log entry with real user_id and transaction_id } }],
-    "dashboard_metrics": { "failed_transactions": 4, "anomaly_score": 8.7 }
+    "primary_entities": [{ "id": "existing_primary_entity_id", "changes": { "status": "failed", "incident_reason": "service_disruption", "chaos_injected": true } }],
+    "activity_logs": [{ "id": "NEW_UUID", "isNew": true, "data": { ...complete new log entry with real user_id and real primary_entity_id } }],
+    "dashboard_metrics": { "failed_entities": 4, "anomaly_score": 8.7 }
   }
 }
 
@@ -67,7 +67,8 @@ RULES:
 - For existing records: only include the id and the specific fields that need to change
 - For new records: set isNew: true and provide the complete record
 - For new activity_log entries, always include "isNew": true at the top level of the mutation object, and put the complete log record inside a "data" field.
-- Every new activity_log must use a real user_id and real transaction_id from the dataset
+- The chaos must propagate consistently across the related user records, primary entities, activity logs, and dashboard metrics.
+- Every new activity_log must use a real user_id and real primary_entity_id from the dataset
 - Minimum mutations only — touch nothing that doesn't need to change`
 
 type MemoryRow = {
@@ -101,7 +102,7 @@ type ChaosDiff = {
   chaos_summary?: string
   mutations?: {
     users?: Array<ChaosMutation<UserRecord>>
-    transactions?: Array<ChaosMutation<TransactionRecord>>
+    primary_entities?: Array<ChaosMutation<PrimaryEntityRecord>>
     activity_logs?: ChaosLogMutation[]
     dashboard_metrics?: Partial<SandboxData['dashboard_metrics']>
   }
@@ -219,14 +220,66 @@ function parseChaosDiff(rawText: string): ChaosDiff {
   return JSON.parse(rawText.trim()) as ChaosDiff
 }
 
+function hasFailureStatus(value: unknown): boolean {
+  return typeof value === 'string' && /(fail|error|blocked|denied|revoked|incident|anomal|suspend|degrad)/i.test(value)
+}
+
+function getRelatedUserIds(record: PrimaryEntityRecord, validUserIds: Set<string>): string[] {
+  return Object.entries(record)
+    .filter(([key, value]) => key !== 'id' && key.endsWith('_id') && typeof value === 'string' && validUserIds.has(value))
+    .map(([, value]) => value as string)
+}
+
+function deriveDashboardMetrics(data: SandboxData): SandboxData['dashboard_metrics'] {
+  const totalValue = data.primary_entities.reduce((sum, entity) => {
+    if (hasFailureStatus(entity.status)) {
+      return sum
+    }
+
+    const preferredKeys = [
+      'total_amount',
+      'billing_amount',
+      'fare',
+      'value',
+      'revenue',
+      'cost',
+      'spend',
+      'usage_credits',
+      'query_count',
+      'seat_count',
+    ]
+
+    for (const key of preferredKeys) {
+      if (typeof entity[key] === 'number' && Number.isFinite(entity[key])) {
+        return sum + (entity[key] as number)
+      }
+    }
+
+    return sum
+  }, 0)
+
+  const activeUsers = data.users.filter((user) => /active/i.test(user.status)).length
+  const failedEntities = data.primary_entities.filter((entity) => hasFailureStatus(entity.status)).length
+  const suspiciousLogs = data.activity_logs.filter((log) =>
+    /fail|conflict|anomaly|alert|suspicious|degrad|incident/i.test(`${log.action} ${log.details}`),
+  ).length
+
+  return {
+    total_value: Number(totalValue.toFixed(2)),
+    active_users: activeUsers,
+    failed_entities: failedEntities,
+    anomaly_score: Number((((failedEntities * 10) + suspiciousLogs * 3) / Math.max(data.activity_logs.length, 1)).toFixed(2)),
+  }
+}
+
 function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
   const mutatedData = JSON.parse(JSON.stringify(originalData)) as SandboxData
   const changedIds = new Set<string>()
   const userIds = new Set(mutatedData.users.map((user) => user.id))
-  const transactionIds = new Set(mutatedData.transactions.map((transaction) => transaction.id))
+  const primaryEntityIds = new Set(mutatedData.primary_entities.map((entity) => entity.id))
   const mutations = diff.mutations
-  const failedTransactionIds = new Set<string>()
-  let hasNewFailedTransactionLog = false
+  const failedPrimaryEntityIds = new Set<string>()
+  let hasNewFailedEntityLog = false
 
   mutations?.users?.forEach((mutation) => {
     const user = mutatedData.users.find((item) => item.id === mutation.id)
@@ -236,13 +289,13 @@ function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
     }
   })
 
-  mutations?.transactions?.forEach((mutation) => {
-    const transaction = mutatedData.transactions.find((item) => item.id === mutation.id)
-    if (transaction && mutation.changes) {
-      Object.assign(transaction, mutation.changes)
-      changedIds.add(transaction.id)
-      if (transaction.status === 'failed') {
-        failedTransactionIds.add(transaction.id)
+  mutations?.primary_entities?.forEach((mutation) => {
+    const primaryEntity = mutatedData.primary_entities.find((item) => item.id === mutation.id)
+    if (primaryEntity && mutation.changes) {
+      Object.assign(primaryEntity, mutation.changes)
+      changedIds.add(primaryEntity.id)
+      if (hasFailureStatus(primaryEntity.status)) {
+        failedPrimaryEntityIds.add(primaryEntity.id)
       }
     }
   })
@@ -251,11 +304,11 @@ function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
     const existingLog = mutatedData.activity_logs.find((item) => item.id === mutation.id)
     if (mutation.isNew || !existingLog) {
       const newLog = mutation.data ?? (mutation as unknown as ActivityLogRecord)
-      if (newLog?.id && userIds.has(newLog.user_id) && transactionIds.has(newLog.transaction_id)) {
+      if (newLog?.id && userIds.has(newLog.user_id) && primaryEntityIds.has(newLog.primary_entity_id)) {
         mutatedData.activity_logs.push(newLog)
         changedIds.add(newLog.id)
-        if (failedTransactionIds.has(newLog.transaction_id)) {
-          hasNewFailedTransactionLog = true
+        if (failedPrimaryEntityIds.has(newLog.primary_entity_id)) {
+          hasNewFailedEntityLog = true
         }
       }
     } else if (mutation.changes) {
@@ -264,46 +317,50 @@ function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
     }
   })
 
-  if (failedTransactionIds.size > 0) {
-    const affectedUserIds = new Set(
-      mutatedData.transactions
-        .filter((transaction) => failedTransactionIds.has(transaction.id))
-        .map((transaction) => transaction.user_id),
-    )
+  if (failedPrimaryEntityIds.size > 0) {
+    const affectedUserIds = new Set<string>()
+    mutatedData.primary_entities
+      .filter((entity) => failedPrimaryEntityIds.has(entity.id))
+      .forEach((entity) => {
+        getRelatedUserIds(entity, userIds).forEach((userId) => affectedUserIds.add(userId))
+      })
 
     mutatedData.users.forEach((user) => {
-      if (affectedUserIds.has(user.id) && user.status !== 'payment_suspended') {
-        user.status = 'payment_suspended'
+      if (affectedUserIds.has(user.id) && user.status !== 'impacted') {
+        user.status = 'impacted'
         changedIds.add(user.id)
       }
     })
   }
 
-  if (failedTransactionIds.size > 0 && !hasNewFailedTransactionLog) {
-    const failedTransaction = mutatedData.transactions.find((transaction) =>
-      failedTransactionIds.has(transaction.id),
+  if (failedPrimaryEntityIds.size > 0 && !hasNewFailedEntityLog) {
+    const failedPrimaryEntity = mutatedData.primary_entities.find((entity) =>
+      failedPrimaryEntityIds.has(entity.id),
     )
-    if (failedTransaction) {
+    if (failedPrimaryEntity) {
+      const fallbackUserId = getRelatedUserIds(failedPrimaryEntity, userIds)[0] ?? mutatedData.users[0]?.id
+      if (fallbackUserId) {
       const fallbackLog: ActivityLogRecord = {
         id: randomUUID(),
-        user_id: failedTransaction.user_id,
-        transaction_id: failedTransaction.id,
-        action: 'payment_failed',
+        user_id: fallbackUserId,
+        primary_entity_id: failedPrimaryEntity.id,
+        action: 'entity_failed',
         timestamp: new Date().toISOString(),
-        details: `Chaos injected payment failure recorded for transaction ${failedTransaction.id}.`,
+        details: `Chaos injected failure recorded for primary entity ${failedPrimaryEntity.id}.`,
       }
       mutatedData.activity_logs.push(fallbackLog)
       changedIds.add(fallbackLog.id)
+      }
     }
-  }
-
-  if (mutations?.dashboard_metrics) {
-    Object.assign(mutatedData.dashboard_metrics, mutations.dashboard_metrics)
   }
 
   mutatedData.activity_logs.sort(
     (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
   )
+  mutatedData.dashboard_metrics = {
+    ...deriveDashboardMetrics(mutatedData),
+    ...(mutations?.dashboard_metrics ?? {}),
+  }
 
   return {
     mutatedData,

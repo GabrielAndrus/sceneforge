@@ -3,23 +3,22 @@ type UserRecord = {
   status: string
 }
 
-type TransactionRecord = {
+type PrimaryEntityRecord = Record<string, unknown> & {
   id: string
-  user_id: string
-  status: string
 }
 
 type ActivityLogRecord = {
   id: string
   user_id: string
-  transaction_id: string
+  primary_entity_id: string
 }
 
 type SandboxData = {
   users: UserRecord[]
-  primary_entities: TransactionRecord[]
+  primary_entities: PrimaryEntityRecord[]
   activity_logs: ActivityLogRecord[]
   dashboard_metrics: {
+    failed_entities: number
     anomaly_score: number
   }
 }
@@ -65,6 +64,16 @@ function printCheck(name: string, passed: boolean) {
   console.log(`${passed ? 'PASS' : 'FAIL'} - ${name}`)
 }
 
+function getRelatedUserIds(record: PrimaryEntityRecord, validUserIds: Set<string>): string[] {
+  return Object.entries(record)
+    .filter(([key, value]) => key !== 'id' && key.endsWith('_id') && typeof value === 'string' && validUserIds.has(value))
+    .map(([, value]) => value as string)
+}
+
+function hasFailureStatus(value: unknown): boolean {
+  return typeof value === 'string' && /(fail|error|blocked|denied|revoked|incident|anomal|suspend|degrad)/i.test(value)
+}
+
 async function main() {
   let passedChecks = 0
   let totalChecks = 0
@@ -86,19 +95,19 @@ async function main() {
   console.log(`sandbox_id: ${generated.sandbox_id}`)
 
   const userIds = new Set(generated.data.users.map((user) => user.id))
-  const transactionIds = new Set(generated.data.primary_entities.map((transaction) => transaction.id))
+  const primaryEntityIds = new Set(generated.data.primary_entities.map((entity) => entity.id))
 
   check(
-    'Every transaction.user_id exists in users',
-    generated.data.primary_entities.every((transaction) => userIds.has(transaction.user_id)),
+    'Every primary entity references at least one real user id',
+    generated.data.primary_entities.every((entity) => getRelatedUserIds(entity, userIds).length > 0),
   )
   check(
     'Every activity_log.user_id exists in users',
     generated.data.activity_logs.every((log) => userIds.has(log.user_id)),
   )
   check(
-    'Every activity_log.transaction_id exists in primary_entities',
-    generated.data.activity_logs.every((log) => transactionIds.has(log.transaction_id)),
+    'Every activity_log.primary_entity_id exists in primary_entities',
+    generated.data.activity_logs.every((log) => primaryEntityIds.has(log.primary_entity_id)),
   )
 
   const beforeUserStatusById = new Map(generated.data.users.map((user) => [user.id, user.status]))
@@ -113,26 +122,26 @@ async function main() {
     }),
   })
 
-  const failedTransactions = chaos.data.primary_entities.filter((transaction) => transaction.status === 'failed')
-  const failedTransactionIds = new Set(failedTransactions.map((transaction) => transaction.id))
+  const failedPrimaryEntities = chaos.data.primary_entities.filter((entity) => hasFailureStatus(entity.status))
+  const failedPrimaryEntityIds = new Set(failedPrimaryEntities.map((entity) => entity.id))
   const changedUsers = chaos.data.users.filter(
     (user) => beforeUserStatusById.get(user.id) !== undefined && beforeUserStatusById.get(user.id) !== user.status,
   )
   const newLogs = chaos.data.activity_logs.filter((log) => !beforeLogIds.has(log.id))
 
   check(
-    'At least one transaction has status "failed"',
-    failedTransactions.length > 0,
+    'At least one primary entity has a failure-like status',
+    failedPrimaryEntities.length > 0,
   )
   check(
     'At least one user has a changed status',
     changedUsers.length > 0,
   )
   check(
-    'At least one new activity_log references a real failed transaction_id',
+    'At least one new activity_log references a real failed primary_entity_id',
     newLogs.some(
       (log) =>
-        failedTransactionIds.has(log.transaction_id) &&
+        failedPrimaryEntityIds.has(log.primary_entity_id) &&
         chaos.data.users.some((user) => user.id === log.user_id),
     ),
   )

@@ -7,16 +7,6 @@ export type UserRecord = {
   created_at: string
 }
 
-export type TransactionRecord = {
-  id: string
-  user_id: string
-  amount: number
-  status: string
-  type: string
-  created_at: string
-  metadata: Record<string, unknown>
-}
-
 export type PrimaryEntityRecord = Record<string, unknown> & {
   id: string
 }
@@ -24,7 +14,7 @@ export type PrimaryEntityRecord = Record<string, unknown> & {
 export type ActivityLogRecord = {
   id: string
   user_id: string
-  transaction_id: string
+  primary_entity_id: string
   action: string
   timestamp: string
   details: string
@@ -33,13 +23,12 @@ export type ActivityLogRecord = {
 export type SandboxData = {
   users: UserRecord[]
   primary_entities: PrimaryEntityRecord[]
-  transactions: TransactionRecord[]
   activity_logs: ActivityLogRecord[]
   feature_flags: Record<string, boolean>
   dashboard_metrics: {
-    total_revenue: number
+    total_value: number
     active_users: number
-    failed_transactions: number
+    failed_entities: number
     anomaly_score: number
   }
   schema_info: {

@@ -25,7 +25,7 @@ type LoadedSandboxData = NonNullable<SandboxResponse['data']>
 type ChaosHighlights = {
   chaosSummary: string
   userChanges: number
-  transactionChanges: number
+  primaryEntityChanges: number
   activityLogChanges: number
   featureFlagChanges: number
   totalChanges: number
@@ -42,7 +42,7 @@ const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge_prompts'
 const PINNED_COLUMNS = [
   'id',
   'user_id',
-  'transaction_id',
+  'primary_entity_id',
   'name',
   'email',
   'role',
@@ -157,17 +157,17 @@ function renderDataTable(rows: TableRow[], changedIds: string[]) {
 
 function createChaosHighlights(
   userChanges: number,
-  transactionChanges: number,
+  primaryEntityChanges: number,
   activityLogChanges: number,
   featureFlagChanges: number,
   chaosSummary: string,
 ): ChaosHighlights {
-  const counts = [userChanges, transactionChanges, activityLogChanges, featureFlagChanges]
+  const counts = [userChanges, primaryEntityChanges, activityLogChanges, featureFlagChanges]
 
   return {
     chaosSummary,
     userChanges,
-    transactionChanges,
+    primaryEntityChanges,
     activityLogChanges,
     featureFlagChanges,
     totalChanges: counts.reduce((sum, count) => sum + count, 0),
@@ -329,7 +329,7 @@ const Chatbot: React.FC = () => {
   const [chaosHighlights, setChaosHighlights] = useState<ChaosHighlights | null>(null)
   const [changedRowIds, setChangedRowIds] = useState<string[]>([])
   const [changedFeatureFlags, setChangedFeatureFlags] = useState<string[]>([])
-  const [primaryEntityTabLabel, setPrimaryEntityTabLabel] = useState('Transactions')
+  const [primaryEntityTabLabel, setPrimaryEntityTabLabel] = useState('Records')
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -356,7 +356,7 @@ const Chatbot: React.FC = () => {
       try {
         const restoredSandbox = await getSandbox(sandboxId)
         setSandbox(restoredSandbox)
-        setPrimaryEntityTabLabel(capitalizeLabel(restoredSandbox.data.schema_info?.primary_entity_name || 'transactions'))
+        setPrimaryEntityTabLabel(capitalizeLabel(restoredSandbox.data.schema_info?.primary_entity_name || 'records'))
         setChaosHighlights(null)
         setChangedRowIds([])
         setChangedFeatureFlags([])
@@ -403,7 +403,6 @@ const Chatbot: React.FC = () => {
     return {
       users: Array.isArray(sandbox.data.users) ? sandbox.data.users : [],
       primary_entities: Array.isArray(sandbox.data.primary_entities) ? sandbox.data.primary_entities : [],
-      transactions: [],
       activity_logs: Array.isArray(sandbox.data.activity_logs) ? sandbox.data.activity_logs : [],
       feature_flags:
         sandbox.data.feature_flags && typeof sandbox.data.feature_flags === 'object'
@@ -411,7 +410,7 @@ const Chatbot: React.FC = () => {
           : {},
       dashboard_metrics: sandbox.data.dashboard_metrics,
       schema_info: sandbox.data.schema_info ?? {
-        primary_entity_name: 'transactions',
+        primary_entity_name: 'records',
         domain: 'custom domain',
       },
     }
@@ -421,7 +420,7 @@ const Chatbot: React.FC = () => {
   const tabChangeCounts = useMemo(
     () => ({
       users: chaosHighlights?.userChanges ?? 0,
-      primary_entities: chaosHighlights?.transactionChanges ?? 0,
+      primary_entities: chaosHighlights?.primaryEntityChanges ?? 0,
       activity_logs: chaosHighlights?.activityLogChanges ?? 0,
       feature_flags: chaosHighlights?.featureFlagChanges ?? 0,
     }),
@@ -465,7 +464,7 @@ const Chatbot: React.FC = () => {
     try {
       const result = await generateSandbox(description)
       setSandbox(result)
-      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'transactions'))
+      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setActiveTab('users')
       setPreviousPrompts(savePromptToStorage(description, result.sandbox_id))
       setSandboxUrl(result.sandbox_id)
@@ -492,17 +491,17 @@ const Chatbot: React.FC = () => {
       const highlightIds = Array.from(new Set(result.changedIds))
       const changedIdSet = new Set(highlightIds)
       const changedUsers = result.data.users.filter((row) => changedIdSet.has(row.id)).length
-      const changedTransactions = result.data.primary_entities.filter((row) => changedIdSet.has(row.id)).length
+      const changedPrimaryEntities = result.data.primary_entities.filter((row) => changedIdSet.has(row.id)).length
       const changedActivityLogs = result.data.activity_logs.filter((row) => changedIdSet.has(row.id)).length
       const nextHighlights = createChaosHighlights(
         changedUsers,
-        changedTransactions,
+        changedPrimaryEntities,
         changedActivityLogs,
         0,
         result.chaos_summary,
       )
       setSandbox(result)
-      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'transactions'))
+      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setChaosHighlights(nextHighlights)
       setChangedRowIds(highlightIds)
       setChangedFeatureFlags([])
@@ -658,16 +657,16 @@ const Chatbot: React.FC = () => {
                 {metrics ? (
                   <div className="metrics-grid">
                     <div className="metric-card glass">
-                      <span className="metric-label">Total Revenue</span>
-                      <strong>${metrics.total_revenue.toFixed(2)}</strong>
+                      <span className="metric-label">Total Value</span>
+                      <strong>{metrics.total_value.toFixed(2)}</strong>
                     </div>
                     <div className="metric-card glass">
                       <span className="metric-label">Active Users</span>
                       <strong>{metrics.active_users}</strong>
                     </div>
                     <div className="metric-card glass">
-                      <span className="metric-label">Failed Transactions</span>
-                      <strong>{metrics.failed_transactions}</strong>
+                      <span className="metric-label">Failed Records</span>
+                      <strong>{metrics.failed_entities}</strong>
                     </div>
                     <div className="metric-card glass">
                       <span className="metric-label">Anomaly Score</span>
