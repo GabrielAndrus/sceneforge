@@ -43,7 +43,7 @@ type PreviousPromptItem = {
   timestamp: number
 }
 type TableRow = Record<string, unknown>
-type ViewingRole = UserRecord['role']
+type PermissionTier = 'admin' | 'standard' | 'restricted'
 
 const TEMPLATE_CACHE_STORAGE_KEY = 'sceneforge_templates_cache'
 const PINNED_COLUMNS = [
@@ -168,6 +168,19 @@ function getRelatedUserIdsFromEntity(entity: PrimaryEntityRecord): string[] {
   return Object.entries(entity)
     .filter(([key, value]) => key.endsWith('_id') && key !== 'id' && typeof value === 'string')
     .map(([, value]) => value as string)
+}
+
+function getPermissionTier(role: string): PermissionTier {
+  const r = role.toLowerCase()
+  if (r.includes('admin') || r.includes('manager') || r.includes('owner')) return 'admin'
+  if (
+    r.includes('viewer') ||
+    r.includes('read') ||
+    r.includes('guest') ||
+    r.includes('patient') ||
+    r.includes('shopper')
+  ) return 'restricted'
+  return 'standard'
 }
 
 function renderSkeletonTableRows(rowCount = 8, columnCount = 6) {
@@ -566,7 +579,8 @@ const Chatbot: React.FC = () => {
     () => viewingUsers.find((user) => user.id === selectedViewingUserId) ?? null,
     [selectedViewingUserId, viewingUsers],
   )
-  const currentViewingRole: ViewingRole = selectedViewingUser?.role ?? 'admin'
+  const currentViewingRole = selectedViewingUser?.role ?? 'admin'
+  const currentPermissionTier = getPermissionTier(currentViewingRole)
 
   useEffect(() => {
     if (!viewingUsers.length) {
@@ -580,11 +594,18 @@ const Chatbot: React.FC = () => {
     }
 
     const preferredUser =
-      viewingUsers.find((user) => user.role === 'admin') ??
+      viewingUsers.find((user) => getPermissionTier(user.role) === 'admin') ??
       viewingUsers[0]
 
     setSelectedViewingUserId(preferredUser.id)
   }, [selectedViewingUserId, viewingUsers])
+
+  useEffect(() => {
+    if (currentPermissionTier === 'restricted' && activeTab === 'activity_logs') {
+      setActiveTab('primary_entities')
+    }
+  }, [activeTab, currentPermissionTier])
+
   const changedRowIdSet = useMemo(() => new Set(changedRowIds), [changedRowIds])
   const tabChangeCounts = useMemo(
     () => ({
@@ -601,13 +622,13 @@ const Chatbot: React.FC = () => {
       return null
     }
 
-    const analystPrimaryEntities = currentViewingRole === 'analyst' && selectedViewingUser
+    const filteredPrimaryEntities = currentPermissionTier !== 'admin' && selectedViewingUser
       ? sandboxData.primary_entities.filter((entity) =>
           getRelatedUserIdsFromEntity(entity).includes(selectedViewingUser.id),
         )
       : sandboxData.primary_entities
-    const allowedPrimaryEntityIds = new Set(analystPrimaryEntities.map((entity) => entity.id))
-    const analystActivityLogs = currentViewingRole === 'analyst' && selectedViewingUser
+    const allowedPrimaryEntityIds = new Set(filteredPrimaryEntities.map((entity) => entity.id))
+    const filteredActivityLogs = currentPermissionTier === 'standard' && selectedViewingUser
       ? sandboxData.activity_logs.filter(
           (log) =>
             log.user_id === selectedViewingUser.id ||
@@ -615,7 +636,7 @@ const Chatbot: React.FC = () => {
         )
       : sandboxData.activity_logs
 
-    if (currentViewingRole === 'viewer' && (activeTab === 'users' || activeTab === 'activity_logs')) {
+    if (currentPermissionTier === 'restricted' && activeTab === 'activity_logs') {
       return <div className="access-restricted-panel">Access Restricted</div>
     }
 
@@ -623,15 +644,15 @@ const Chatbot: React.FC = () => {
       case 'users':
         return renderUsersTable(sandboxData.users, Array.from(changedRowIdSet))
       case 'primary_entities':
-        return renderPrimaryEntitiesTable(analystPrimaryEntities, Array.from(changedRowIdSet))
+        return renderPrimaryEntitiesTable(filteredPrimaryEntities, Array.from(changedRowIdSet))
       case 'activity_logs':
-        return renderActivityLogsTable(analystActivityLogs, Array.from(changedRowIdSet))
+        return renderActivityLogsTable(filteredActivityLogs, Array.from(changedRowIdSet))
       case 'feature_flags':
         return renderFeatureFlagsTable(sandboxData.feature_flags, changedFeatureFlags)
       default:
         return null
     }
-  }, [activeTab, changedFeatureFlags, changedRowIdSet, currentViewingRole, sandboxData, selectedViewingUser])
+  }, [activeTab, changedFeatureFlags, changedRowIdSet, currentPermissionTier, sandboxData, selectedViewingUser])
 
   async function handleCopyLink() {
     if (!sandbox) {
@@ -979,8 +1000,8 @@ const Chatbot: React.FC = () => {
                     </option>
                   ))}
                 </select>
-                <span className={`role-badge ${currentViewingRole}`}>{capitalizeLabel(currentViewingRole)}</span>
-                {chaosHighlights && currentViewingRole !== 'admin' ? (
+                <span className={`role-badge ${currentPermissionTier}`}>{capitalizeLabel(currentViewingRole)}</span>
+                {chaosHighlights && currentPermissionTier !== 'admin' ? (
                   <span className="role-alert-badge">Anomaly detected</span>
                 ) : null}
               </div>
@@ -1098,9 +1119,9 @@ const Chatbot: React.FC = () => {
 
                 <div className="tab-row">
                   {[
-                    { id: 'users' as const, label: 'Users', hidden: currentViewingRole === 'viewer' },
+                    { id: 'users' as const, label: 'Users', hidden: false },
                     { id: 'primary_entities' as const, label: primaryEntityTabLabel, hidden: false },
-                    { id: 'activity_logs' as const, label: 'Activity Logs', hidden: currentViewingRole === 'viewer' },
+                    { id: 'activity_logs' as const, label: 'Activity Logs', hidden: currentPermissionTier === 'restricted' },
                     { id: 'feature_flags' as const, label: 'Feature Flags', hidden: false },
                   ]
                     .filter((tab) => !tab.hidden)

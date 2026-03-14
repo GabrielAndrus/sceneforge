@@ -2,7 +2,7 @@ export type UserRecord = {
   id: string
   name: string
   email: string
-  role: 'admin' | 'analyst' | 'viewer'
+  role: string
   status: string
   created_at: string
 }

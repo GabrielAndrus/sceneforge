@@ -300,13 +300,13 @@
   border-color: rgba(76, 175, 80, 0.3);
 }
 
-.role-badge.analyst {
+.role-badge.standard {
   color: #ffe28c;
   background: rgba(255, 193, 7, 0.16);
   border-color: rgba(255, 193, 7, 0.3);
 }
 
-.role-badge.viewer {
+.role-badge.restricted {
   color: #ffb6b6;
   background: rgba(255, 92, 92, 0.16);
   border-color: rgba(255, 92, 92, 0.3);
