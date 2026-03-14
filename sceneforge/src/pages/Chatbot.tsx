@@ -316,13 +316,14 @@ function renderPrimaryEntitiesTable(primaryEntities: PrimaryEntityRecord[], chan
     primaryEntities.map((entity) => ({
       ...entity,
       amount: typeof entity.amount === 'number' ? `$${entity.amount.toFixed(2)}` : entity.amount,
-      total_amount:
-        typeof entity.total_amount === 'number' ? `$${entity.total_amount.toFixed(2)}` : entity.total_amount,
-      fare: typeof entity.fare === 'number' ? `$${entity.fare.toFixed(2)}` : entity.fare,
-      billing_amount:
-        typeof entity.billing_amount === 'number'
-          ? `$${entity.billing_amount.toFixed(2)}`
-          : entity.billing_amount,
+      order_value:
+        typeof entity.order_value === 'number' ? `$${entity.order_value.toFixed(2)}` : entity.order_value,
+      trip_value:
+        typeof entity.trip_value === 'number' ? `$${entity.trip_value.toFixed(2)}` : entity.trip_value,
+      visit_value:
+        typeof entity.visit_value === 'number'
+          ? `$${entity.visit_value.toFixed(2)}`
+          : entity.visit_value,
     })) as TableRow[],
     changedIds,
   )

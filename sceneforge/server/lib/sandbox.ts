@@ -205,13 +205,13 @@ function hasFailureStatus(value: unknown): boolean {
 
 function getNumericSignal(record: PrimaryEntityRecord): number {
   const preferredKeys = [
-    'total_amount',
-    'billing_amount',
-    'fare',
     'value',
     'revenue',
     'cost',
     'spend',
+    'order_value',
+    'visit_value',
+    'trip_value',
     'usage_credits',
     'query_count',
     'seat_count',
@@ -281,7 +281,7 @@ function buildFallbackPrimaryEntity(
       origin: pick(['Downtown', 'Airport', 'Union Station'], index),
       destination: pick(['Marina', 'Financial District', 'Midtown'], index),
       distance_km: Number((4.5 + index * 1.3).toFixed(1)),
-      fare: Number((18 + index * 4.25).toFixed(2)),
+      trip_value: Number((18 + index * 4.25).toFixed(2)),
       status,
       surge_multiplier: Number((1 + (index % 3) * 0.25).toFixed(2)),
       rating: Number((4.2 + (index % 4) * 0.1).toFixed(1)),
@@ -297,7 +297,7 @@ function buildFallbackPrimaryEntity(
       appointment_type: pick(['follow_up', 'diagnostic', 'telehealth'], index),
       diagnosis: pick(['hypertension_review', 'lab_follow_up', 'annual_exam'], index),
       duration_mins: 20 + index * 5,
-      billing_amount: Number((120 + index * 35).toFixed(2)),
+      visit_value: Number((120 + index * 35).toFixed(2)),
       insurance_verified: index % 2 === 0,
       status,
       created_at: createdAt,
@@ -325,7 +325,7 @@ function buildFallbackPrimaryEntity(
       items: [
         { sku: `sku-${index + 1}`, quantity: (index % 3) + 1 },
       ],
-      total_amount: Number((49 + index * 17.5).toFixed(2)),
+      order_value: Number((49 + index * 17.5).toFixed(2)),
       discount_code: index % 2 === 0 ? 'SPRING24' : null,
       shipping_status: pick(['processing', 'fulfilled', 'delayed'], index),
       status,

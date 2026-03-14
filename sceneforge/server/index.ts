@@ -237,13 +237,13 @@ function deriveDashboardMetrics(data: SandboxData): SandboxData['dashboard_metri
     }
 
     const preferredKeys = [
-      'total_amount',
-      'billing_amount',
-      'fare',
       'value',
       'revenue',
       'cost',
       'spend',
+      'order_value',
+      'visit_value',
+      'trip_value',
       'usage_credits',
       'query_count',
       'seat_count',
