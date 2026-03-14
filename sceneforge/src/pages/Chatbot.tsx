@@ -30,7 +30,7 @@ const tabs = [
 type TabId = (typeof tabs)[number]['id']
 type LoadedSandboxData = NonNullable<SandboxResponse['data']>
 
-const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge.previousPrompts'
+const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge_prompts'
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.'
@@ -214,7 +214,7 @@ function renderFeatureFlagsTable(featureFlags: Record<string, boolean>) {
 
 const Chatbot: React.FC = () => {
   const [inputText, setInputText] = useState('')
-  const [previousPrompts, setPreviousPrompts] = useState<string[]>(() => readStoredPrompts())
+  const [previousPrompts, setPreviousPrompts] = useState<string[]>([])
   const [sandbox, setSandbox] = useState<SandboxResponse | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('users')
   const [isGenerating, setIsGenerating] = useState(false)
@@ -237,6 +237,10 @@ const Chatbot: React.FC = () => {
 
     return () => window.clearTimeout(timeoutId)
   }, [chaosIndicator])
+
+  useEffect(() => {
+    setPreviousPrompts(readStoredPrompts())
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
