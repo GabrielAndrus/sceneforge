@@ -74,7 +74,7 @@ const Features: React.FC = () => {
             <motion.div 
               className="interactive-demo terminal-1 glass"
               drag
-              dragConstraints={isMounted && constraintRef.current ? constraintRef : undefined}
+              dragConstraints={isMounted ? constraintRef : undefined}
               dragElastic={0.08}
               whileDrag={{ scale: 1.05, cursor: "grabbing", zIndex: 10 }}
             >
@@ -108,7 +108,7 @@ const Features: React.FC = () => {
             <motion.div 
               className="interactive-demo terminal-2 glass"
               drag
-              dragConstraints={isMounted && constraintRef.current ? constraintRef : undefined}
+              dragConstraints={isMounted ? constraintRef : undefined}
               dragElastic={0.08}
               whileDrag={{ scale: 1.05, cursor: "grabbing", zIndex: 10 }}
             >
