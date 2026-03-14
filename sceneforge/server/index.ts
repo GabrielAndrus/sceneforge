@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { randomUUID } from 'node:crypto'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
 import OpenAI from 'openai'
@@ -46,6 +47,7 @@ Return this structure:
 RULES:
 - For existing records: only include the id and the specific fields that need to change
 - For new records: set isNew: true and provide the complete record
+- For new activity_log entries, always include "isNew": true at the top level of the mutation object, and put the complete log record inside a "data" field.
 - Every new activity_log must use a real user_id and real transaction_id from the dataset
 - Minimum mutations only — touch nothing that doesn't need to change`
 
@@ -204,6 +206,8 @@ function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
   const userIds = new Set(mutatedData.users.map((user) => user.id))
   const transactionIds = new Set(mutatedData.transactions.map((transaction) => transaction.id))
   const mutations = diff.mutations
+  const failedTransactionIds = new Set<string>()
+  let hasNewFailedTransactionLog = false
 
   mutations?.users?.forEach((mutation) => {
     const user = mutatedData.users.find((item) => item.id === mutation.id)
@@ -218,25 +222,61 @@ function applyChaosDiff(originalData: SandboxData, diff: ChaosDiff) {
     if (transaction && mutation.changes) {
       Object.assign(transaction, mutation.changes)
       changedIds.add(transaction.id)
+      if (transaction.status === 'failed') {
+        failedTransactionIds.add(transaction.id)
+      }
     }
   })
 
   mutations?.activity_logs?.forEach((mutation) => {
-    if (mutation.isNew && mutation.data) {
-      const log = mutation.data
-      if (userIds.has(log.user_id) && transactionIds.has(log.transaction_id)) {
-        mutatedData.activity_logs.push(log)
-        changedIds.add(log.id)
-      }
-      return
-    }
-
     const existingLog = mutatedData.activity_logs.find((item) => item.id === mutation.id)
-    if (existingLog && mutation.changes) {
+    if (mutation.isNew || !existingLog) {
+      const newLog = mutation.data ?? (mutation as unknown as ActivityLogRecord)
+      if (newLog?.id && userIds.has(newLog.user_id) && transactionIds.has(newLog.transaction_id)) {
+        mutatedData.activity_logs.push(newLog)
+        changedIds.add(newLog.id)
+        if (failedTransactionIds.has(newLog.transaction_id)) {
+          hasNewFailedTransactionLog = true
+        }
+      }
+    } else if (mutation.changes) {
       Object.assign(existingLog, mutation.changes)
       changedIds.add(existingLog.id)
     }
   })
+
+  if (failedTransactionIds.size > 0) {
+    const affectedUserIds = new Set(
+      mutatedData.transactions
+        .filter((transaction) => failedTransactionIds.has(transaction.id))
+        .map((transaction) => transaction.user_id),
+    )
+
+    mutatedData.users.forEach((user) => {
+      if (affectedUserIds.has(user.id) && user.status !== 'payment_suspended') {
+        user.status = 'payment_suspended'
+        changedIds.add(user.id)
+      }
+    })
+  }
+
+  if (failedTransactionIds.size > 0 && !hasNewFailedTransactionLog) {
+    const failedTransaction = mutatedData.transactions.find((transaction) =>
+      failedTransactionIds.has(transaction.id),
+    )
+    if (failedTransaction) {
+      const fallbackLog: ActivityLogRecord = {
+        id: randomUUID(),
+        user_id: failedTransaction.user_id,
+        transaction_id: failedTransaction.id,
+        action: 'payment_failed',
+        timestamp: new Date().toISOString(),
+        details: `Chaos injected payment failure recorded for transaction ${failedTransaction.id}.`,
+      }
+      mutatedData.activity_logs.push(fallbackLog)
+      changedIds.add(fallbackLog.id)
+    }
+  }
 
   if (mutations?.dashboard_metrics) {
     Object.assign(mutatedData.dashboard_metrics, mutations.dashboard_metrics)
