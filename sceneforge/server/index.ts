@@ -407,9 +407,7 @@ app.post(
     ].join('\n\n')
 
     const rawJson = await requestModelJson(GENERATE_SYSTEM_PROMPT, prompt)
-    const data = parseSandboxPayload(rawJson, {
-      description,
-    })
+    const data = parseSandboxPayload(rawJson)
     const sandbox = createSandboxRecord(description, data)
 
     const { error } = await supabase.from('sandboxes').insert(sandbox)
