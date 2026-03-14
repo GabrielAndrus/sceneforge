@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
   applyChaos,
@@ -37,6 +37,11 @@ type ChaosHighlights = {
   featureFlags: string[]
   totalChanges: number
   changedTabs: number
+}
+type PreviousPromptItem = {
+  prompt: string
+  sandbox_id: string
+  timestamp: number
 }
 
 const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge_prompts'
@@ -132,7 +137,36 @@ function clearSandboxUrl() {
   window.history.replaceState({}, '', '/chat')
 }
 
-function readStoredPrompts(): string[] {
+function normalizeStoredPrompt(item: unknown, index: number): PreviousPromptItem | null {
+  if (typeof item === 'string' && item.trim()) {
+    return {
+      prompt: item.trim(),
+      sandbox_id: '',
+      timestamp: Date.now() - index,
+    }
+  }
+
+  if (item && typeof item === 'object') {
+    const record = item as Record<string, unknown>
+    const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : ''
+    if (!prompt) {
+      return null
+    }
+
+    return {
+      prompt,
+      sandbox_id: typeof record.sandbox_id === 'string' ? record.sandbox_id.trim() : '',
+      timestamp:
+        typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)
+          ? record.timestamp
+          : Date.now() - index,
+    }
+  }
+
+  return null
+}
+
+function readStoredPrompts(): PreviousPromptItem[] {
   if (typeof window === 'undefined') {
     return []
   }
@@ -144,30 +178,46 @@ function readStoredPrompts(): string[] {
     }
 
     const parsed = JSON.parse(raw) as unknown
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+    const normalized = Array.isArray(parsed)
+      ? parsed
+          .map((item, index) => normalizeStoredPrompt(item, index))
+          .filter((item): item is PreviousPromptItem => item !== null)
+      : []
+
+    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(normalized))
+    return normalized
   } catch {
     return []
   }
 }
 
-function savePromptToStorage(prompt: string): string[] {
+function savePromptToStorage(prompt: string, sandboxId: string): PreviousPromptItem[] {
   if (typeof window === 'undefined') {
-    return [prompt]
+    return [{ prompt, sandbox_id: sandboxId, timestamp: Date.now() }]
   }
 
   try {
-    const existing = JSON.parse(window.localStorage.getItem(PREVIOUS_PROMPTS_STORAGE_KEY) || '[]') as unknown
-    const nextPrompts = Array.isArray(existing)
-      ? existing.filter((item): item is string => typeof item === 'string')
-      : []
-
-    nextPrompts.unshift(prompt)
+    const existing = readStoredPrompts().filter((item) => item.sandbox_id !== sandboxId)
+    const nextPrompts: PreviousPromptItem[] = [
+      {
+        prompt,
+        sandbox_id: sandboxId,
+        timestamp: Date.now(),
+      },
+      ...existing,
+    ]
     const limitedPrompts = nextPrompts.slice(0, 20)
     window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(limitedPrompts))
 
     return limitedPrompts
   } catch {
-    const fallbackPrompts = [prompt]
+    const fallbackPrompts: PreviousPromptItem[] = [
+      {
+        prompt,
+        sandbox_id: sandboxId,
+        timestamp: Date.now(),
+      },
+    ]
     window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(fallbackPrompts))
     return fallbackPrompts
   }
@@ -285,7 +335,7 @@ function renderFeatureFlagsTable(featureFlags: Record<string, boolean>, changedF
 
 const Chatbot: React.FC = () => {
   const [inputText, setInputText] = useState('')
-  const [previousPrompts, setPreviousPrompts] = useState<string[]>([])
+  const [previousPrompts, setPreviousPrompts] = useState<PreviousPromptItem[]>([])
   const [sandbox, setSandbox] = useState<SandboxResponse | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('users')
   const [isGenerating, setIsGenerating] = useState(false)
@@ -314,33 +364,22 @@ const Chatbot: React.FC = () => {
     setPreviousPrompts(readStoredPrompts())
   }, [])
 
-  useEffect(() => {
-    const sandboxId = getSandboxIdFromUrl()
-    if (!sandboxId) {
-      return
-    }
-
-    let isCancelled = false
-
-    async function hydrateSandbox() {
+  const restoreSandbox = useCallback(
+    async (sandboxId: string, promptText?: string) => {
       setIsHydratingSandbox(true)
       setErrorMessage(null)
       setExpiredSandboxMessage(null)
 
       try {
         const restoredSandbox = await getSandbox(sandboxId)
-        if (isCancelled) {
-          return
-        }
-
         setSandbox(restoredSandbox)
         setChaosHighlights(null)
         setActiveTab('users')
-      } catch (error) {
-        if (isCancelled) {
-          return
+        setSandboxUrl(restoredSandbox.sandbox_id)
+        if (promptText) {
+          setInputText(promptText)
         }
-
+      } catch (error) {
         const message = getErrorMessage(error)
         if (/not found|expired/i.test(message)) {
           setSandbox(null)
@@ -350,18 +389,24 @@ const Chatbot: React.FC = () => {
           setErrorMessage(message)
         }
       } finally {
-        if (!isCancelled) {
-          setIsHydratingSandbox(false)
-        }
+        setIsHydratingSandbox(false)
       }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    const sandboxId = getSandboxIdFromUrl()
+    if (!sandboxId) {
+      return
+    }
+
+    async function hydrateSandbox() {
+      await restoreSandbox(sandboxId)
     }
 
     void hydrateSandbox()
-
-    return () => {
-      isCancelled = true
-    }
-  }, [])
+  }, [restoreSandbox])
 
   const headerSandboxId = sandbox?.sandbox_id ?? 'No sandbox loaded'
   const sandboxData = useMemo<LoadedSandboxData | null>(() => {
@@ -427,7 +472,7 @@ const Chatbot: React.FC = () => {
       const result = await generateSandbox(description)
       setSandbox(result)
       setActiveTab('users')
-      setPreviousPrompts(savePromptToStorage(description))
+      setPreviousPrompts(savePromptToStorage(description, result.sandbox_id))
       setSandboxUrl(result.sandbox_id)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
@@ -521,12 +566,24 @@ const Chatbot: React.FC = () => {
               <li className="history-empty">Generated prompts will appear here.</li>
             ) : (
               previousPrompts.map((prompt, index) => (
-                <li key={`${prompt}-${index}`} className="history-item">
-                  <button type="button" className="history-button" onClick={() => setInputText(prompt)}>
+                <li key={`${prompt.sandbox_id || prompt.prompt}-${index}`} className="history-item">
+                  <button
+                    type="button"
+                    className="history-button"
+                    onClick={() => {
+                      if (!prompt.sandbox_id) {
+                        setInputText(prompt.prompt)
+                        setErrorMessage('This saved prompt cannot restore a sandbox yet. Generate it again to save a restorable record.')
+                        return
+                      }
+
+                      void restoreSandbox(prompt.sandbox_id, prompt.prompt)
+                    }}
+                  >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                     </svg>
-                    <span className="history-text">{prompt}</span>
+                    <span className="history-text">{prompt.prompt}</span>
                   </button>
                 </li>
               ))
