@@ -312,21 +312,7 @@ function renderUsersTable(users: UserRecord[], changedIds: string[]) {
 }
 
 function renderPrimaryEntitiesTable(primaryEntities: PrimaryEntityRecord[], changedIds: string[]) {
-  return renderDataTable(
-    primaryEntities.map((entity) => ({
-      ...entity,
-      amount: typeof entity.amount === 'number' ? `$${entity.amount.toFixed(2)}` : entity.amount,
-      order_value:
-        typeof entity.order_value === 'number' ? `$${entity.order_value.toFixed(2)}` : entity.order_value,
-      trip_value:
-        typeof entity.trip_value === 'number' ? `$${entity.trip_value.toFixed(2)}` : entity.trip_value,
-      visit_value:
-        typeof entity.visit_value === 'number'
-          ? `$${entity.visit_value.toFixed(2)}`
-          : entity.visit_value,
-    })) as TableRow[],
-    changedIds,
-  )
+  return renderDataTable(primaryEntities as unknown as TableRow[], changedIds)
 }
 
 function renderActivityLogsTable(activityLogs: ActivityLogRecord[], changedIds: string[]) {
