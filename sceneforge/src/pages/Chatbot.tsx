@@ -77,6 +77,37 @@ function capitalizeLabel(value: string): string {
     .join(' ')
 }
 
+function normalizeDashboardMetrics(metrics: unknown) {
+  const record =
+    metrics && typeof metrics === 'object' && !Array.isArray(metrics)
+      ? (metrics as Record<string, unknown>)
+      : {}
+
+  const totalValue =
+    typeof record.total_value === 'number'
+      ? record.total_value
+      : typeof record.total_revenue === 'number'
+        ? record.total_revenue
+        : 0
+
+  const activeUsers = typeof record.active_users === 'number' ? record.active_users : 0
+  const failedEntities =
+    typeof record.failed_entities === 'number'
+      ? record.failed_entities
+      : typeof record.failed_transactions === 'number'
+        ? record.failed_transactions
+        : 0
+
+  const anomalyScore = typeof record.anomaly_score === 'number' ? record.anomaly_score : 0
+
+  return {
+    total_value: totalValue,
+    active_users: activeUsers,
+    failed_entities: failedEntities,
+    anomaly_score: anomalyScore,
+  }
+}
+
 function getOrderedColumns(rows: TableRow[]): string[] {
   const discoveredColumns: string[] = []
 
@@ -408,7 +439,7 @@ const Chatbot: React.FC = () => {
         sandbox.data.feature_flags && typeof sandbox.data.feature_flags === 'object'
           ? sandbox.data.feature_flags
           : {},
-      dashboard_metrics: sandbox.data.dashboard_metrics,
+      dashboard_metrics: normalizeDashboardMetrics(sandbox.data.dashboard_metrics),
       schema_info: sandbox.data.schema_info ?? {
         primary_entity_name: 'records',
         domain: 'custom domain',
