@@ -2,12 +2,15 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
   applyChaos,
+  generateFromTemplate,
   generateSandbox,
   getSandbox,
+  getTemplates,
   saveTemplate,
   type ActivityLogRecord,
   type PrimaryEntityRecord,
   type SandboxResponse,
+  type TemplateSummary,
   type UserRecord,
 } from '../lib/api'
 import './Chatbot.css'
@@ -147,6 +150,23 @@ function formatMetricValue(value: number): string {
     minimumFractionDigits: hasFraction ? 2 : 0,
     maximumFractionDigits: hasFraction ? 2 : 2,
   })
+}
+
+function renderSkeletonTableRows(rowCount = 8, columnCount = 6) {
+  return (
+    <div className="table-skeleton" aria-hidden="true">
+      {Array.from({ length: rowCount }).map((_, rowIndex) => (
+        <div key={rowIndex} className="table-skeleton-row">
+          {Array.from({ length: columnCount }).map((__, columnIndex) => (
+            <span
+              key={`${rowIndex}-${columnIndex}`}
+              className="table-skeleton-cell"
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function getOrderedColumns(rows: TableRow[]): string[] {
@@ -389,6 +409,13 @@ const Chatbot: React.FC = () => {
   const [changedRowIds, setChangedRowIds] = useState<string[]>([])
   const [changedFeatureFlags, setChangedFeatureFlags] = useState<string[]>([])
   const [primaryEntityTabLabel, setPrimaryEntityTabLabel] = useState('Records')
+  const [templates, setTemplates] = useState<TemplateSummary[]>([])
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false)
+  const [isLaunchingTemplateId, setIsLaunchingTemplateId] = useState<string | null>(null)
+  const [isTemplateFormOpen, setIsTemplateFormOpen] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const [isCopyLinkSuccess, setIsCopyLinkSuccess] = useState(false)
+  const [isChaosButtonFlashing, setIsChaosButtonFlashing] = useState(false)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -405,6 +432,47 @@ const Chatbot: React.FC = () => {
   useEffect(() => {
     setPreviousPrompts(readStoredPrompts())
   }, [])
+
+  useEffect(() => {
+    if (!isCopyLinkSuccess) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsCopyLinkSuccess(false)
+    }, 2000)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [isCopyLinkSuccess])
+
+  useEffect(() => {
+    if (!isChaosButtonFlashing) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsChaosButtonFlashing(false)
+    }, 500)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [isChaosButtonFlashing])
+
+  const loadTemplates = useCallback(async () => {
+    setIsLoadingTemplates(true)
+
+    try {
+      const nextTemplates = await getTemplates()
+      setTemplates(nextTemplates)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsLoadingTemplates(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadTemplates()
+  }, [loadTemplates])
 
   const restoreSandbox = useCallback(
     async (sandboxId: string, promptText?: string) => {
@@ -454,6 +522,7 @@ const Chatbot: React.FC = () => {
   }, [restoreSandbox])
 
   const headerSandboxId = sandbox?.sandbox_id ?? 'No sandbox loaded'
+  const showLoadingWorkspace = isGenerating || isHydratingSandbox
   const sandboxData = useMemo<LoadedSandboxData | null>(() => {
     if (!sandbox?.data) {
       return null
@@ -505,6 +574,19 @@ const Chatbot: React.FC = () => {
     }
   }, [activeTab, changedFeatureFlags, changedRowIdSet, sandboxData])
 
+  async function handleCopyLink() {
+    if (!sandbox) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      setIsCopyLinkSuccess(true)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    }
+  }
+
   async function handleSubmit() {
     const description = inputText.trim()
     if (!description || isGenerating) {
@@ -519,6 +601,7 @@ const Chatbot: React.FC = () => {
     setChaosHighlights(null)
     setChangedRowIds([])
     setChangedFeatureFlags([])
+    setIsTemplateFormOpen(false)
 
     try {
       const result = await generateSandbox(description)
@@ -565,6 +648,7 @@ const Chatbot: React.FC = () => {
       setChangedRowIds(highlightIds)
       setChangedFeatureFlags([])
       setChaosIndicator(result.chaos_summary)
+      setIsChaosButtonFlashing(true)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
@@ -572,13 +656,23 @@ const Chatbot: React.FC = () => {
     }
   }
 
-  async function handleSaveTemplate() {
+  function handleSaveTemplate() {
     if (!sandbox || isSavingTemplate) {
       return
     }
 
-    const name = window.prompt('Template name')
-    if (!name?.trim()) {
+    setTemplateName('')
+    setIsTemplateFormOpen(true)
+    setStatusMessage(null)
+  }
+
+  async function handleConfirmSaveTemplate() {
+    if (!sandbox || isSavingTemplate) {
+      return
+    }
+
+    const name = templateName.trim()
+    if (!name) {
       return
     }
 
@@ -586,12 +680,47 @@ const Chatbot: React.FC = () => {
     setErrorMessage(null)
 
     try {
-      const result = await saveTemplate(sandbox.sandbox_id, name.trim())
-      setStatusMessage(`Template saved: ${result.template_id}`)
+      await saveTemplate(sandbox.sandbox_id, name)
+      setStatusMessage('Template saved')
+      setIsTemplateFormOpen(false)
+      setTemplateName('')
+      await loadTemplates()
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
       setIsSavingTemplate(false)
+    }
+  }
+
+  async function handleGenerateFromTemplate(template: TemplateSummary) {
+    if (isLaunchingTemplateId) {
+      return
+    }
+
+    setIsLaunchingTemplateId(template.id)
+    setIsGenerating(true)
+    setErrorMessage(null)
+    setStatusMessage(null)
+    setChaosIndicator(null)
+    setExpiredSandboxMessage(null)
+    setChangedRowIds([])
+    setChangedFeatureFlags([])
+    setChaosHighlights(null)
+    setInputText(template.description)
+
+    try {
+      const result = await generateFromTemplate(template.id)
+      setSandbox(result)
+      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
+      setActiveTab('users')
+      setSandboxUrl(result.sandbox_id)
+      setStatusMessage(`Template launched: ${template.name}`)
+      setPreviousPrompts(savePromptToStorage(template.description, result.sandbox_id))
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsLaunchingTemplateId(null)
+      setIsGenerating(false)
     }
   }
 
@@ -606,6 +735,8 @@ const Chatbot: React.FC = () => {
     setChaosHighlights(null)
     setChangedRowIds([])
     setChangedFeatureFlags([])
+    setIsTemplateFormOpen(false)
+    setTemplateName('')
     clearSandboxUrl()
   }
 
@@ -657,6 +788,36 @@ const Chatbot: React.FC = () => {
               ))
             )}
           </ul>
+
+          <div className="templates-section">
+            <h3>Templates</h3>
+            <ul className="history-list">
+              {isLoadingTemplates ? (
+                <li className="history-empty">Loading templates...</li>
+              ) : templates.length === 0 ? (
+                <li className="history-empty">Saved templates will appear here.</li>
+              ) : (
+                templates.map((template) => (
+                  <li key={template.id} className="history-item">
+                    <button
+                      type="button"
+                      className="history-button"
+                      onClick={() => void handleGenerateFromTemplate(template)}
+                      disabled={isLaunchingTemplateId === template.id || isGenerating}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                      </svg>
+                      <span className="history-text">
+                        {isLaunchingTemplateId === template.id ? `Launching ${template.name}...` : template.name}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
         </div>
 
         <div className="sidebar-footer">
@@ -674,39 +835,103 @@ const Chatbot: React.FC = () => {
       <main className="chat-main">
         <header className="chat-header glass">
           <div className="chat-header-copy">
-            <h2>
-              Active Sandbox: <span className="text-secondary">{headerSandboxId}</span>
-            </h2>
+            <div className="header-title-row">
+              <h2>
+                Active Sandbox: <span className="text-secondary">{headerSandboxId}</span>
+              </h2>
+              <button
+                type="button"
+                className="header-inline-btn"
+                onClick={() => void handleCopyLink()}
+                disabled={!sandbox}
+              >
+                {isCopyLinkSuccess ? 'Copied!' : 'Copy Link'}
+              </button>
+            </div>
             {chaosIndicator ? <span className="chaos-indicator">{chaosIndicator}</span> : null}
             {statusMessage ? <span className="status-indicator">{statusMessage}</span> : null}
           </div>
           <div className="chat-header-actions">
-            <button type="button" className="header-action-btn danger" onClick={handleChaos} disabled={!sandbox || isApplyingChaos || isGenerating}>
+            <button
+              type="button"
+              className={`header-action-btn danger ${isApplyingChaos ? 'chaos-loading' : ''} ${isChaosButtonFlashing ? 'chaos-success-flash' : ''}`}
+              onClick={handleChaos}
+              disabled={!sandbox || isApplyingChaos || isGenerating}
+            >
               {isApplyingChaos ? 'Injecting...' : 'Chaos'}
             </button>
-            <button type="button" className="header-action-btn" onClick={handleSaveTemplate} disabled={!sandbox || isSavingTemplate || isGenerating}>
-              {isSavingTemplate ? 'Saving...' : 'Save Template'}
-            </button>
+            {isTemplateFormOpen ? (
+              <div className="template-inline-form">
+                <input
+                  type="text"
+                  className="template-name-input"
+                  placeholder="Template name"
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void handleConfirmSaveTemplate()
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      setIsTemplateFormOpen(false)
+                      setTemplateName('')
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="header-inline-btn"
+                  onClick={() => void handleConfirmSaveTemplate()}
+                  disabled={!templateName.trim() || isSavingTemplate}
+                >
+                  {isSavingTemplate ? 'Saving...' : 'Confirm'}
+                </button>
+                <button
+                  type="button"
+                  className="header-inline-btn"
+                  onClick={() => {
+                    setIsTemplateFormOpen(false)
+                    setTemplateName('')
+                  }}
+                  disabled={isSavingTemplate}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="header-action-btn" onClick={handleSaveTemplate} disabled={!sandbox || isSavingTemplate || isGenerating}>
+                Save Template
+              </button>
+            )}
             <button type="button" className="header-action-btn" onClick={handleReset}>
               Reset
             </button>
           </div>
         </header>
 
-        <div className={`chat-content ${sandboxData ? 'chat-content-loaded' : ''}`}>
-          {isGenerating || isHydratingSandbox ? (
-            <div className="empty-state">
-              <div className="empty-icon glass loading-spin">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                </svg>
+        <div className={`chat-content ${sandboxData || showLoadingWorkspace ? 'chat-content-loaded' : ''}`}>
+          {showLoadingWorkspace ? (
+            <div className="workspace-panel">
+              <div className="workspace-toolbar">
+                <div className="metrics-grid">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div key={index} className="metric-card glass metric-card-skeleton">
+                      <span className="metric-skeleton-label shimmer" />
+                      <strong className="metric-skeleton-value shimmer" />
+                    </div>
+                  ))}
+                </div>
+                <div className="tab-row">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <span key={index} className="tab-skeleton-pill shimmer" />
+                  ))}
+                </div>
               </div>
-              <h2>{isHydratingSandbox ? 'Restoring sandbox...' : 'Forging your sandbox...'}</h2>
-              <p className="workspace-subtitle">
-                {isHydratingSandbox
-                  ? 'Loading saved sandbox data from the shareable URL.'
-                  : 'Generating coherent users, domain-specific records, activity logs, and flags from your prompt.'}
-              </p>
+              <div className="table-shell glass">
+                {renderSkeletonTableRows()}
+              </div>
             </div>
           ) : sandboxData ? (
             <div className="workspace-panel">
@@ -762,7 +987,11 @@ const Chatbot: React.FC = () => {
                 </div>
               ) : null}
 
-              <div className="table-shell glass">{activeTable}</div>
+              <div className="table-shell glass">
+                <div key={activeTab} className="table-fade-panel">
+                  {activeTable}
+                </div>
+              </div>
             </div>
           ) : (
             <div className="empty-state">
@@ -814,10 +1043,14 @@ const Chatbot: React.FC = () => {
               }}
             />
             <button type="button" className="send-btn" disabled={!inputText.trim() || isGenerating} onClick={() => void handleSubmit()}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
+              {isGenerating ? (
+                <span className="send-spinner" aria-hidden="true" />
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              )}
             </button>
           </div>
           <p className="input-footer">SceneForge can make mistakes. Verify test data before production simulations.</p>
