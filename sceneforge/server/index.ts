@@ -58,6 +58,14 @@ For activity_logs:
 - Reference real ids from users and real ids from primary_entities
 - Make them reflect actions that could actually happen in the generated environment
 
+Dataset size expectations:
+- Respect any explicit counts the user asks for
+- If the user does not specify exact counts, generate a non-trivial dataset rather than a tiny sample
+- Default to roughly 4-8 users for small business scenarios, more if the prompt implies a larger organization
+- Default to roughly 12-24 primary_entities so the tables feel realistic and useful
+- Default to roughly 18-40 activity_logs so there is enough history to inspect patterns and anomalies
+- Make the number of activity_logs meaningfully larger than the number of primary_entities
+
 For dashboard_metrics:
 - Derive values from the actual generated data
 - Pick the most relevant numeric field as the primary metric
