@@ -102,6 +102,29 @@ function readStoredPrompts(): string[] {
   }
 }
 
+function savePromptToStorage(prompt: string): string[] {
+  if (typeof window === 'undefined') {
+    return [prompt]
+  }
+
+  try {
+    const existing = JSON.parse(window.localStorage.getItem(PREVIOUS_PROMPTS_STORAGE_KEY) || '[]') as unknown
+    const nextPrompts = Array.isArray(existing)
+      ? existing.filter((item): item is string => typeof item === 'string')
+      : []
+
+    nextPrompts.unshift(prompt)
+    const limitedPrompts = nextPrompts.slice(0, 20)
+    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(limitedPrompts))
+
+    return limitedPrompts
+  } catch {
+    const fallbackPrompts = [prompt]
+    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(fallbackPrompts))
+    return fallbackPrompts
+  }
+}
+
 function renderUsersTable(users: UserRecord[]) {
   return (
     <table className="data-table">
@@ -243,14 +266,6 @@ const Chatbot: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(previousPrompts))
-  }, [previousPrompts])
-
-  useEffect(() => {
     const sandboxId = getSandboxIdFromUrl()
     if (!sandboxId) {
       return
@@ -336,10 +351,6 @@ const Chatbot: React.FC = () => {
     }
   }, [activeTab, sandboxData])
 
-  function appendPreviousPrompt(prompt: string) {
-    setPreviousPrompts((current) => [...current, prompt])
-  }
-
   async function handleSubmit() {
     const description = inputText.trim()
     if (!description || isGenerating) {
@@ -356,7 +367,7 @@ const Chatbot: React.FC = () => {
       const result = await generateSandbox(description)
       setSandbox(result)
       setActiveTab('users')
-      appendPreviousPrompt(description)
+      setPreviousPrompts(savePromptToStorage(description))
       setSandboxUrl(result.sandbox_id)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
