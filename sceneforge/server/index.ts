@@ -111,6 +111,14 @@ type SandboxRow = {
   expires_at: string
 }
 
+type TemplateRow = {
+  id: string
+  name: string
+  description: string
+  data: SandboxData
+  created_at: string
+}
+
 type ChaosMutation<TChanges> = {
   id: string
   changes?: Partial<TChanges>
@@ -218,6 +226,43 @@ async function getSandboxById(id: string): Promise<SandboxRow> {
   }
 
   return data as SandboxRow
+}
+
+async function getTemplateById(id: string): Promise<TemplateRow> {
+  const { data, error } = await supabase
+    .from('templates')
+    .select('id, name, description, data, created_at')
+    .eq('id', id)
+    .single()
+
+  if (error || !data) {
+    throw new Error(`Template not found: ${id}`)
+  }
+
+  return data as TemplateRow
+}
+
+async function generateFreshSandbox(description: string) {
+  const memory = await getMemoryRecord()
+  const prompt = [
+    `Product context: ${memory?.product_context ?? DEFAULT_PRODUCT_CONTEXT}`,
+    `Past scenarios: ${JSON.stringify(memory?.past_scenarios ?? [])}`,
+    `Requested scenario: ${description}`,
+    'Return only raw JSON.',
+  ].join('\n\n')
+
+  const rawJson = await requestModelJson(GENERATE_SYSTEM_PROMPT, prompt)
+  const data = parseSandboxPayload(rawJson)
+  const sandbox = createSandboxRecord(description, data)
+
+  const { error } = await supabase.from('sandboxes').insert(sandbox)
+  if (error) {
+    throw error
+  }
+
+  await appendScenarioToMemory(description)
+
+  return sandbox
 }
 
 async function requestModelJson(systemPrompt: string, prompt: string): Promise<string> {
@@ -435,25 +480,69 @@ app.post(
     }
 
     ensureSupabaseEnv()
+    const sandbox = await generateFreshSandbox(description)
 
-    const memory = await getMemoryRecord()
-    const prompt = [
-      `Product context: ${memory?.product_context ?? DEFAULT_PRODUCT_CONTEXT}`,
-      `Past scenarios: ${JSON.stringify(memory?.past_scenarios ?? [])}`,
-      `Requested scenario: ${description}`,
-      'Return only raw JSON.',
-    ].join('\n\n')
+    response.status(201).json({
+      sandbox_id: sandbox.id,
+      data: sandbox.data,
+    })
+  }),
+)
 
-    const rawJson = await requestModelJson(GENERATE_SYSTEM_PROMPT, prompt)
-    const data = parseSandboxPayload(rawJson)
-    const sandbox = createSandboxRecord(description, data)
+app.get(
+  '/api/sandboxes',
+  asyncRoute(async (_request, response) => {
+    ensureSupabaseEnv()
+    const { data, error } = await supabase
+      .from('sandboxes')
+      .select('id, description, created_at')
+      .order('created_at', { ascending: false })
+      .limit(20)
 
-    const { error } = await supabase.from('sandboxes').insert(sandbox)
     if (error) {
       throw error
     }
 
-    await appendScenarioToMemory(description)
+    response.json({
+      sandboxes: (data ?? []) as Array<Pick<SandboxRow, 'id' | 'description' | 'created_at'>>,
+    })
+  }),
+)
+
+app.get(
+  '/api/templates',
+  asyncRoute(async (_request, response) => {
+    ensureSupabaseEnv()
+    const { data, error } = await supabase
+      .from('templates')
+      .select('id, name, description, created_at')
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    if (error) {
+      throw error
+    }
+
+    response.json({
+      templates: (data ?? []) as Array<Pick<TemplateRow, 'id' | 'name' | 'description' | 'created_at'>>,
+    })
+  }),
+)
+
+app.post(
+  '/api/generate-from-template',
+  asyncRoute(async (request, response) => {
+    const templateId =
+      typeof request.body.template_id === 'string' ? request.body.template_id.trim() : ''
+
+    if (!templateId) {
+      response.status(400).json({ error: 'template_id is required.' })
+      return
+    }
+
+    ensureSupabaseEnv()
+    const template = await getTemplateById(templateId)
+    const sandbox = await generateFreshSandbox(template.description)
 
     response.status(201).json({
       sandbox_id: sandbox.id,
@@ -543,6 +632,25 @@ app.get(
     const sandbox = await getSandboxById(sandboxId)
 
     response.json(sandbox)
+  }),
+)
+
+app.delete(
+  '/api/sandbox/:id',
+  asyncRoute(async (request, response) => {
+    ensureSupabaseEnv()
+    const sandboxId = Array.isArray(request.params.id) ? request.params.id[0] : request.params.id
+
+    const { error } = await supabase
+      .from('sandboxes')
+      .delete()
+      .eq('id', sandboxId)
+
+    if (error) {
+      throw error
+    }
+
+    response.json({ success: true })
   }),
 )
 

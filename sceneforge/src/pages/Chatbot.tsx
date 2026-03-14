@@ -2,12 +2,18 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import {
   applyChaos,
+  deleteSandboxRecord,
+  generateFromTemplate,
   generateSandbox,
   getSandbox,
+  getSandboxes,
+  getTemplates,
   saveTemplate,
   type ActivityLogRecord,
   type PrimaryEntityRecord,
+  type SandboxSummary,
   type SandboxResponse,
+  type TemplateSummary,
   type UserRecord,
 } from '../lib/api'
 import './Chatbot.css'
@@ -38,7 +44,7 @@ type PreviousPromptItem = {
 }
 type TableRow = Record<string, unknown>
 
-const PREVIOUS_PROMPTS_STORAGE_KEY = 'sceneforge_prompts'
+const TEMPLATE_CACHE_STORAGE_KEY = 'sceneforge_templates_cache'
 const PINNED_COLUMNS = [
   'id',
   'user_id',
@@ -147,6 +153,23 @@ function formatMetricValue(value: number): string {
     minimumFractionDigits: hasFraction ? 2 : 0,
     maximumFractionDigits: hasFraction ? 2 : 2,
   })
+}
+
+function renderSkeletonTableRows(rowCount = 8, columnCount = 6) {
+  return (
+    <div className="table-skeleton" aria-hidden="true">
+      {Array.from({ length: rowCount }).map((_, rowIndex) => (
+        <div key={rowIndex} className="table-skeleton-row">
+          {Array.from({ length: columnCount }).map((__, columnIndex) => (
+            <span
+              key={`${rowIndex}-${columnIndex}`}
+              className="table-skeleton-cell"
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function getOrderedColumns(rows: TableRow[]): string[] {
@@ -262,89 +285,53 @@ function clearSandboxUrl() {
   window.history.replaceState({}, '', '/chat')
 }
 
-function normalizeStoredPrompt(item: unknown, index: number): PreviousPromptItem | null {
-  if (typeof item === 'string' && item.trim()) {
-    return {
-      prompt: item.trim(),
-      sandbox_id: '',
-      timestamp: Date.now() - index,
-    }
-  }
-
-  if (item && typeof item === 'object') {
-    const record = item as Record<string, unknown>
-    const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : ''
-    if (!prompt) {
-      return null
-    }
-
-    return {
-      prompt,
-      sandbox_id: typeof record.sandbox_id === 'string' ? record.sandbox_id.trim() : '',
-      timestamp:
-        typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)
-          ? record.timestamp
-          : Date.now() - index,
-    }
-  }
-
-  return null
+function mapSandboxesToPromptItems(items: SandboxSummary[]): PreviousPromptItem[] {
+  return items.map((item, index) => ({
+    prompt: item.description,
+    sandbox_id: item.id,
+    timestamp: Number.isFinite(Date.parse(item.created_at))
+      ? Date.parse(item.created_at)
+      : Date.now() - index,
+  }))
 }
 
-function readStoredPrompts(): PreviousPromptItem[] {
+function readCachedTemplates(): TemplateSummary[] {
   if (typeof window === 'undefined') {
     return []
   }
 
   try {
-    const raw = window.localStorage.getItem(PREVIOUS_PROMPTS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(TEMPLATE_CACHE_STORAGE_KEY)
     if (!raw) {
       return []
     }
 
     const parsed = JSON.parse(raw) as unknown
-    const normalized = Array.isArray(parsed)
-      ? parsed
-          .map((item, index) => normalizeStoredPrompt(item, index))
-          .filter((item): item is PreviousPromptItem => item !== null)
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is TemplateSummary => {
+          const record = item as Record<string, unknown>
+          return (
+            typeof record.id === 'string' &&
+            typeof record.name === 'string' &&
+            typeof record.description === 'string' &&
+            typeof record.created_at === 'string'
+          )
+        })
       : []
-
-    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(normalized))
-    return normalized
   } catch {
     return []
   }
 }
 
-function savePromptToStorage(prompt: string, sandboxId: string): PreviousPromptItem[] {
+function writeCachedTemplates(templates: TemplateSummary[]) {
   if (typeof window === 'undefined') {
-    return [{ prompt, sandbox_id: sandboxId, timestamp: Date.now() }]
+    return
   }
 
   try {
-    const existing = readStoredPrompts().filter((item) => item.sandbox_id !== sandboxId)
-    const nextPrompts: PreviousPromptItem[] = [
-      {
-        prompt,
-        sandbox_id: sandboxId,
-        timestamp: Date.now(),
-      },
-      ...existing,
-    ]
-    const limitedPrompts = nextPrompts.slice(0, 20)
-    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(limitedPrompts))
-
-    return limitedPrompts
+    window.localStorage.setItem(TEMPLATE_CACHE_STORAGE_KEY, JSON.stringify(templates))
   } catch {
-    const fallbackPrompts: PreviousPromptItem[] = [
-      {
-        prompt,
-        sandbox_id: sandboxId,
-        timestamp: Date.now(),
-      },
-    ]
-    window.localStorage.setItem(PREVIOUS_PROMPTS_STORAGE_KEY, JSON.stringify(fallbackPrompts))
-    return fallbackPrompts
+    return
   }
 }
 
@@ -389,6 +376,14 @@ const Chatbot: React.FC = () => {
   const [changedRowIds, setChangedRowIds] = useState<string[]>([])
   const [changedFeatureFlags, setChangedFeatureFlags] = useState<string[]>([])
   const [primaryEntityTabLabel, setPrimaryEntityTabLabel] = useState('Records')
+  const [templates, setTemplates] = useState<TemplateSummary[]>([])
+  const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false)
+  const [isLaunchingTemplateId, setIsLaunchingTemplateId] = useState<string | null>(null)
+  const [isTemplateFormOpen, setIsTemplateFormOpen] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const [isCopyLinkSuccess, setIsCopyLinkSuccess] = useState(false)
+  const [isChaosButtonFlashing, setIsChaosButtonFlashing] = useState(false)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -403,8 +398,57 @@ const Chatbot: React.FC = () => {
   }, [chaosIndicator])
 
   useEffect(() => {
-    setPreviousPrompts(readStoredPrompts())
+    setTemplates(readCachedTemplates())
   }, [])
+
+  useEffect(() => {
+    if (!isCopyLinkSuccess) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsCopyLinkSuccess(false)
+    }, 2000)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [isCopyLinkSuccess])
+
+  useEffect(() => {
+    if (!isChaosButtonFlashing) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsChaosButtonFlashing(false)
+    }, 500)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [isChaosButtonFlashing])
+
+  const loadSidebarData = useCallback(async () => {
+    setIsLoadingPrompts(true)
+    setIsLoadingTemplates(true)
+
+    try {
+      const [nextSandboxes, nextTemplates] = await Promise.all([
+        getSandboxes(),
+        getTemplates(),
+      ])
+
+      setPreviousPrompts(mapSandboxesToPromptItems(nextSandboxes))
+      setTemplates(nextTemplates)
+      writeCachedTemplates(nextTemplates)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsLoadingPrompts(false)
+      setIsLoadingTemplates(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadSidebarData()
+  }, [loadSidebarData])
 
   const restoreSandbox = useCallback(
     async (sandboxId: string, promptText?: string) => {
@@ -454,6 +498,7 @@ const Chatbot: React.FC = () => {
   }, [restoreSandbox])
 
   const headerSandboxId = sandbox?.sandbox_id ?? 'No sandbox loaded'
+  const showLoadingWorkspace = isGenerating || isHydratingSandbox
   const sandboxData = useMemo<LoadedSandboxData | null>(() => {
     if (!sandbox?.data) {
       return null
@@ -505,6 +550,19 @@ const Chatbot: React.FC = () => {
     }
   }, [activeTab, changedFeatureFlags, changedRowIdSet, sandboxData])
 
+  async function handleCopyLink() {
+    if (!sandbox) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      setIsCopyLinkSuccess(true)
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    }
+  }
+
   async function handleSubmit() {
     const description = inputText.trim()
     if (!description || isGenerating) {
@@ -519,13 +577,17 @@ const Chatbot: React.FC = () => {
     setChaosHighlights(null)
     setChangedRowIds([])
     setChangedFeatureFlags([])
+    setIsTemplateFormOpen(false)
 
     try {
       const result = await generateSandbox(description)
       setSandbox(result)
       setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
       setActiveTab('users')
-      setPreviousPrompts(savePromptToStorage(description, result.sandbox_id))
+      setPreviousPrompts((current) => [
+        { prompt: description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
+        ...current.filter((item) => item.sandbox_id !== result.sandbox_id),
+      ].slice(0, 20))
       setSandboxUrl(result.sandbox_id)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
@@ -565,6 +627,7 @@ const Chatbot: React.FC = () => {
       setChangedRowIds(highlightIds)
       setChangedFeatureFlags([])
       setChaosIndicator(result.chaos_summary)
+      setIsChaosButtonFlashing(true)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
@@ -572,13 +635,23 @@ const Chatbot: React.FC = () => {
     }
   }
 
-  async function handleSaveTemplate() {
+  function handleSaveTemplate() {
     if (!sandbox || isSavingTemplate) {
       return
     }
 
-    const name = window.prompt('Template name')
-    if (!name?.trim()) {
+    setTemplateName('')
+    setIsTemplateFormOpen(true)
+    setStatusMessage(null)
+  }
+
+  async function handleConfirmSaveTemplate() {
+    if (!sandbox || isSavingTemplate) {
+      return
+    }
+
+    const name = templateName.trim()
+    if (!name) {
       return
     }
 
@@ -586,12 +659,72 @@ const Chatbot: React.FC = () => {
     setErrorMessage(null)
 
     try {
-      const result = await saveTemplate(sandbox.sandbox_id, name.trim())
-      setStatusMessage(`Template saved: ${result.template_id}`)
+      await saveTemplate(sandbox.sandbox_id, name)
+      setStatusMessage('Template saved')
+      setIsTemplateFormOpen(false)
+      setTemplateName('')
+      await loadSidebarData()
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
     } finally {
       setIsSavingTemplate(false)
+    }
+  }
+
+  async function handleGenerateFromTemplate(template: TemplateSummary) {
+    if (isLaunchingTemplateId) {
+      return
+    }
+
+    setIsLaunchingTemplateId(template.id)
+    setIsGenerating(true)
+    setErrorMessage(null)
+    setStatusMessage(null)
+    setChaosIndicator(null)
+    setExpiredSandboxMessage(null)
+    setChangedRowIds([])
+    setChangedFeatureFlags([])
+    setChaosHighlights(null)
+    setInputText(template.description)
+
+    try {
+      const result = await generateFromTemplate(template.id)
+      setSandbox(result)
+      setPrimaryEntityTabLabel(capitalizeLabel(result.data.schema_info?.primary_entity_name || 'records'))
+      setActiveTab('users')
+      setSandboxUrl(result.sandbox_id)
+      setStatusMessage(`Template launched: ${template.name}`)
+      setPreviousPrompts((current) => [
+        { prompt: template.description, sandbox_id: result.sandbox_id, timestamp: Date.now() },
+        ...current.filter((item) => item.sandbox_id !== result.sandbox_id),
+      ].slice(0, 20))
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
+    } finally {
+      setIsLaunchingTemplateId(null)
+      setIsGenerating(false)
+    }
+  }
+
+  async function handleDeletePrompt(prompt: PreviousPromptItem) {
+    if (!prompt.sandbox_id) {
+      return
+    }
+
+    setErrorMessage(null)
+    setStatusMessage(null)
+
+    try {
+      await deleteSandboxRecord(prompt.sandbox_id)
+      setPreviousPrompts((current) => current.filter((item) => item.sandbox_id !== prompt.sandbox_id))
+
+      if (sandbox?.sandbox_id === prompt.sandbox_id) {
+        handleReset()
+      }
+
+      setStatusMessage('Sandbox deleted')
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error))
     }
   }
 
@@ -606,6 +739,8 @@ const Chatbot: React.FC = () => {
     setChaosHighlights(null)
     setChangedRowIds([])
     setChangedFeatureFlags([])
+    setIsTemplateFormOpen(false)
+    setTemplateName('')
     clearSandboxUrl()
   }
 
@@ -630,33 +765,81 @@ const Chatbot: React.FC = () => {
         <div className="history-section">
           <h3>Previous Prompts</h3>
           <ul className="history-list">
-            {previousPrompts.length === 0 ? (
+            {isLoadingPrompts && previousPrompts.length === 0 ? (
+              <li className="history-empty">Loading recent sandboxes...</li>
+            ) : previousPrompts.length === 0 ? (
               <li className="history-empty">Generated prompts will appear here.</li>
             ) : (
               previousPrompts.map((prompt, index) => (
                 <li key={`${prompt.sandbox_id || prompt.prompt}-${index}`} className="history-item">
-                  <button
-                    type="button"
-                    className="history-button"
-                    onClick={() => {
-                      if (!prompt.sandbox_id) {
-                        setInputText(prompt.prompt)
-                        setErrorMessage('This saved prompt cannot restore a sandbox yet. Generate it again to save a restorable record.')
-                        return
-                      }
+                  <div className="history-entry">
+                    <button
+                      type="button"
+                      className="history-button"
+                      onClick={() => {
+                        if (!prompt.sandbox_id) {
+                          setInputText(prompt.prompt)
+                          setErrorMessage('This saved prompt cannot restore a sandbox yet. Generate it again to save a restorable record.')
+                          return
+                        }
 
-                      void restoreSandbox(prompt.sandbox_id, prompt.prompt)
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                    <span className="history-text">{prompt.prompt}</span>
-                  </button>
+                        void restoreSandbox(prompt.sandbox_id, prompt.prompt)
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                      <span className="history-text">{prompt.prompt}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="history-delete-btn"
+                      onClick={() => void handleDeletePrompt(prompt)}
+                      aria-label={`Delete sandbox ${prompt.prompt}`}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6l-1 14H6L5 6"></path>
+                        <path d="M10 11v6"></path>
+                        <path d="M14 11v6"></path>
+                        <path d="M9 6V4h6v2"></path>
+                      </svg>
+                    </button>
+                  </div>
                 </li>
               ))
             )}
           </ul>
+
+          <div className="templates-section">
+            <h3>Templates</h3>
+            <ul className="history-list">
+              {isLoadingTemplates && templates.length === 0 ? (
+                <li className="history-empty">Loading templates...</li>
+              ) : templates.length === 0 ? (
+                <li className="history-empty">Saved templates will appear here.</li>
+              ) : (
+                templates.map((template) => (
+                  <li key={template.id} className="history-item">
+                    <button
+                      type="button"
+                      className="history-button"
+                      onClick={() => void handleGenerateFromTemplate(template)}
+                      disabled={isLaunchingTemplateId === template.id || isGenerating}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                      </svg>
+                      <span className="history-text">
+                        {isLaunchingTemplateId === template.id ? `Launching ${template.name}...` : template.name}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
         </div>
 
         <div className="sidebar-footer">
@@ -674,43 +857,102 @@ const Chatbot: React.FC = () => {
       <main className="chat-main">
         <header className="chat-header glass">
           <div className="chat-header-copy">
-            <h2>
-              Active Sandbox: <span className="text-secondary">{headerSandboxId}</span>
-            </h2>
+            <div className="header-title-row">
+              <h2>
+                Active Sandbox: <span className="text-secondary">{headerSandboxId}</span>
+              </h2>
+              <button
+                type="button"
+                className="header-inline-btn"
+                onClick={() => void handleCopyLink()}
+                disabled={!sandbox}
+              >
+                {isCopyLinkSuccess ? 'Copied!' : 'Copy Link'}
+              </button>
+            </div>
             {chaosIndicator ? <span className="chaos-indicator">{chaosIndicator}</span> : null}
             {statusMessage ? <span className="status-indicator">{statusMessage}</span> : null}
           </div>
           <div className="chat-header-actions">
-            <button type="button" className="header-action-btn danger" onClick={handleChaos} disabled={!sandbox || isApplyingChaos || isGenerating}>
+            <button
+              type="button"
+              className={`header-action-btn danger ${isApplyingChaos ? 'chaos-loading' : ''} ${isChaosButtonFlashing ? 'chaos-success-flash' : ''}`}
+              onClick={handleChaos}
+              disabled={!sandbox || isApplyingChaos || isGenerating}
+            >
               {isApplyingChaos ? 'Injecting...' : 'Chaos'}
             </button>
-            <button type="button" className="header-action-btn" onClick={handleSaveTemplate} disabled={!sandbox || isSavingTemplate || isGenerating}>
-              {isSavingTemplate ? 'Saving...' : 'Save Template'}
-            </button>
+            {isTemplateFormOpen ? (
+              <div className="template-inline-form">
+                <input
+                  type="text"
+                  className="template-name-input"
+                  placeholder="Template name"
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void handleConfirmSaveTemplate()
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      setIsTemplateFormOpen(false)
+                      setTemplateName('')
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="header-inline-btn"
+                  onClick={() => void handleConfirmSaveTemplate()}
+                  disabled={!templateName.trim() || isSavingTemplate}
+                >
+                  {isSavingTemplate ? 'Saving...' : 'Confirm'}
+                </button>
+                <button
+                  type="button"
+                  className="header-inline-btn"
+                  onClick={() => {
+                    setIsTemplateFormOpen(false)
+                    setTemplateName('')
+                  }}
+                  disabled={isSavingTemplate}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="header-action-btn" onClick={handleSaveTemplate} disabled={!sandbox || isSavingTemplate || isGenerating}>
+                Save Template
+              </button>
+            )}
             <button type="button" className="header-action-btn" onClick={handleReset}>
               Reset
             </button>
           </div>
         </header>
 
-        <div className={`chat-content ${sandboxData ? 'chat-content-loaded' : ''}`}>
-          {isGenerating || isHydratingSandbox ? (
-            <div className="empty-state">
-              <div className="loading-state">
-                <div className="empty-icon glass loading-spin">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-                    <polygon className="bolt-outline" points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                    <polygon className="bolt-filled"  points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                  </svg>
+        <div className={`chat-content ${sandboxData || showLoadingWorkspace ? 'chat-content-loaded' : ''}`}>
+          {showLoadingWorkspace ? (
+            <div className="workspace-panel">
+              <div className="workspace-toolbar">
+                <div className="metrics-grid">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div key={index} className="metric-card glass metric-card-skeleton">
+                      <span className="metric-skeleton-label shimmer" />
+                      <strong className="metric-skeleton-value shimmer" />
+                    </div>
+                  ))}
                 </div>
-
-                <h2 className="loading-heading">
-                  {isHydratingSandbox ? 'Restoring sandbox...' : 'Forging your sandbox...'}
-                </h2>
-
-                <span className="loading-status">
-                  {isHydratingSandbox ? 'hydrating · session memory' : 'synthesising · ai model active'}
-                </span>
+                <div className="tab-row">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <span key={index} className="tab-skeleton-pill shimmer" />
+                  ))}
+                </div>
+              </div>
+              <div className="table-shell glass">
+                {renderSkeletonTableRows()}
               </div>
             </div>
           ) : sandboxData ? (
@@ -767,7 +1009,11 @@ const Chatbot: React.FC = () => {
                 </div>
               ) : null}
 
-              <div className="table-shell glass">{activeTable}</div>
+              <div className="table-shell glass">
+                <div key={activeTab} className="table-fade-panel">
+                  {activeTable}
+                </div>
+              </div>
             </div>
           ) : (
             <div className="empty-state">
@@ -819,10 +1065,14 @@ const Chatbot: React.FC = () => {
               }}
             />
             <button type="button" className="send-btn" disabled={!inputText.trim() || isGenerating} onClick={() => void handleSubmit()}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
+              {isGenerating ? (
+                <span className="send-spinner" aria-hidden="true" />
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              )}
             </button>
           </div>
           <p className="input-footer">SceneForge can make mistakes. Verify test data before production simulations.</p>

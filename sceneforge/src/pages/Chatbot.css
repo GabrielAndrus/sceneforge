@@ -102,6 +102,12 @@
   font-size: 14px;
 }
 
+.history-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .history-item:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-primary);
@@ -119,6 +125,24 @@
   text-align: left;
 }
 
+.history-delete-btn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.48);
+  background: transparent;
+  transition: all 0.2s ease;
+}
+
+.history-delete-btn:hover {
+  color: #ffb6b6;
+  background: rgba(255, 92, 92, 0.12);
+}
+
 .history-text {
   white-space: nowrap;
   overflow: hidden;
@@ -130,6 +154,10 @@
   color: rgba(255, 255, 255, 0.38);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.templates-section {
+  margin-top: 28px;
 }
 
 .sidebar-footer {
@@ -198,10 +226,18 @@
   gap: 8px;
 }
 
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .chat-header-actions {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .header-action-btn {
@@ -247,9 +283,60 @@
   cursor: not-allowed;
 }
 
+.header-inline-btn {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.header-inline-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.header-inline-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .header-action-btn.danger {
   border-color: rgba(255, 92, 92, 0.3);
   color: #ffb6b6;
+}
+
+.header-action-btn.danger.chaos-loading {
+  animation: chaosPulse 1s ease-in-out infinite;
+  box-shadow: 0 0 0 rgba(255, 92, 92, 0.2);
+}
+
+.header-action-btn.danger.chaos-success-flash {
+  animation: chaosImpact 0.5s ease;
+}
+
+.template-inline-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.template-name-input {
+  min-width: 180px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.template-name-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .chaos-indicator,
@@ -470,6 +557,15 @@
   transform: scale(1.05);
 }
 
+.send-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(10, 10, 14, 0.18);
+  border-top-color: var(--bg-color);
+  animation: rotateGlyph 0.8s linear infinite;
+}
+
 .input-footer {
   text-align: center;
   font-size: 12px;
@@ -607,6 +703,31 @@
   letter-spacing: -0.03em;
 }
 
+.metric-card-skeleton {
+  overflow: hidden;
+}
+
+.metric-skeleton-label,
+.metric-skeleton-value,
+.tab-skeleton-pill,
+.table-skeleton-cell {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.metric-skeleton-label {
+  width: 42%;
+  height: 12px;
+  border-radius: 999px;
+}
+
+.metric-skeleton-value {
+  width: 68%;
+  height: 28px;
+  border-radius: 10px;
+}
+
 .tab-row {
   display: flex;
   flex-wrap: wrap;
@@ -677,6 +798,12 @@
   line-height: 1;
 }
 
+.tab-skeleton-pill {
+  width: 118px;
+  height: 42px;
+  border-radius: 999px;
+}
+
 .chaos-banner {
   width: 100%;
   border-radius: 14px;
@@ -687,6 +814,8 @@
   font-size: 13px;
   font-weight: 600;
   line-height: 1.5;
+  animation: chaosBannerDrop 0.35s ease;
+  box-shadow: 0 0 24px rgba(255, 92, 92, 0.18);
 }
 
 .table-shell {
@@ -696,6 +825,38 @@
   min-height: 0;
   flex: 1;
   overflow: auto;
+}
+
+.table-fade-panel {
+  animation: tabFade 0.22s ease;
+}
+
+.table-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+
+.table-skeleton-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.table-skeleton-cell {
+  display: block;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  animation: shimmer 1.4s infinite;
 }
 
 .data-table {
@@ -786,6 +947,61 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes chaosPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(255, 92, 92, 0.12);
+    background: rgba(255, 92, 92, 0.1);
+  }
+
+  50% {
+    box-shadow: 0 0 18px rgba(255, 92, 92, 0.38);
+    background: rgba(255, 92, 92, 0.18);
+  }
+}
+
+@keyframes chaosImpact {
+  0% {
+    background: rgba(255, 92, 92, 0.32);
+    box-shadow: 0 0 24px rgba(255, 92, 92, 0.6);
+  }
+
+  100% {
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: none;
+  }
+}
+
+@keyframes chaosBannerDrop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tabFade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
   }
 }
 

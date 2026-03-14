@@ -46,6 +46,19 @@ export type SandboxResponse = {
   data: SandboxData
 }
 
+export type TemplateSummary = {
+  id: string
+  name: string
+  description: string
+  created_at: string
+}
+
+export type SandboxSummary = {
+  id: string
+  description: string
+  created_at: string
+}
+
 export type ChaosResponse = SandboxResponse & {
   changedIds: string[]
   chaos_summary: string
@@ -97,6 +110,29 @@ export function saveTemplate(sandboxId: string, name: string) {
     body: JSON.stringify({
       sandbox_id: sandboxId,
       name,
+    }),
+  })
+}
+
+export function getTemplates() {
+  return apiRequest<{ templates: TemplateSummary[] }>('/api/templates').then((payload) => payload.templates)
+}
+
+export function getSandboxes() {
+  return apiRequest<{ sandboxes: SandboxSummary[] }>('/api/sandboxes').then((payload) => payload.sandboxes)
+}
+
+export function deleteSandboxRecord(sandboxId: string) {
+  return apiRequest<{ success: true }>(`/api/sandbox/${sandboxId}`, {
+    method: 'DELETE',
+  })
+}
+
+export function generateFromTemplate(templateId: string) {
+  return apiRequest<SandboxResponse>('/api/generate-from-template', {
+    method: 'POST',
+    body: JSON.stringify({
+      template_id: templateId,
     }),
   })
 }
