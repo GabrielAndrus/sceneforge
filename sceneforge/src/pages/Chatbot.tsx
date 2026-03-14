@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   applyChaos,
@@ -31,10 +31,10 @@ type TabId = (typeof tabs)[number]['id']
 type LoadedSandboxData = NonNullable<SandboxResponse['data']>
 type ChaosHighlights = {
   chaosType: string
-  users: string[]
-  transactions: string[]
-  activityLogs: string[]
-  featureFlags: string[]
+  userChanges: number
+  transactionChanges: number
+  activityLogChanges: number
+  featureFlagChanges: number
   totalChanges: number
   changedTabs: number
 }
@@ -83,14 +83,6 @@ function formatChaosLabel(value: string): string {
     .join(' ')
 }
 
-function getChangedIds<T extends { id: string }>(beforeItems: T[], afterItems: T[]): string[] {
-  const beforeMap = new Map(beforeItems.map((item) => [item.id, JSON.stringify(item)]))
-
-  return afterItems
-    .filter((item) => !beforeMap.has(item.id) || beforeMap.get(item.id) !== JSON.stringify(item))
-    .map((item) => item.id)
-}
-
 function getChangedFeatureFlags(
   beforeFlags: Record<string, boolean>,
   afterFlags: Record<string, boolean>,
@@ -101,22 +93,20 @@ function getChangedFeatureFlags(
 }
 
 function createChaosHighlights(
-  beforeData: LoadedSandboxData,
-  afterData: LoadedSandboxData,
+  userChanges: number,
+  transactionChanges: number,
+  activityLogChanges: number,
+  featureFlagChanges: number,
   chaosType: string,
 ): ChaosHighlights {
-  const users = getChangedIds(beforeData.users, afterData.users)
-  const transactions = getChangedIds(beforeData.transactions, afterData.transactions)
-  const activityLogs = getChangedIds(beforeData.activity_logs, afterData.activity_logs)
-  const featureFlags = getChangedFeatureFlags(beforeData.feature_flags, afterData.feature_flags)
-  const counts = [users.length, transactions.length, activityLogs.length, featureFlags.length]
+  const counts = [userChanges, transactionChanges, activityLogChanges, featureFlagChanges]
 
   return {
     chaosType,
-    users,
-    transactions,
-    activityLogs,
-    featureFlags,
+    userChanges,
+    transactionChanges,
+    activityLogChanges,
+    featureFlagChanges,
     totalChanges: counts.reduce((sum, count) => sum + count, 0),
     changedTabs: counts.filter((count) => count > 0).length,
   }
@@ -347,6 +337,9 @@ const Chatbot: React.FC = () => {
   const [chaosIndicator, setChaosIndicator] = useState<string | null>(null)
   const [expiredSandboxMessage, setExpiredSandboxMessage] = useState<string | null>(null)
   const [chaosHighlights, setChaosHighlights] = useState<ChaosHighlights | null>(null)
+  const [changedRowIds, setChangedRowIds] = useState<string[]>([])
+  const [changedFeatureFlags, setChangedFeatureFlags] = useState<string[]>([])
+  const preChaosData = useRef<LoadedSandboxData | null>(null)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -374,6 +367,8 @@ const Chatbot: React.FC = () => {
         const restoredSandbox = await getSandbox(sandboxId)
         setSandbox(restoredSandbox)
         setChaosHighlights(null)
+        setChangedRowIds([])
+        setChangedFeatureFlags([])
         setActiveTab('users')
         setSandboxUrl(restoredSandbox.sandbox_id)
         if (promptText) {
@@ -426,12 +421,13 @@ const Chatbot: React.FC = () => {
     }
   }, [sandbox])
   const metrics = sandboxData?.dashboard_metrics
+  const changedRowIdSet = useMemo(() => new Set(changedRowIds), [changedRowIds])
   const tabChangeCounts = useMemo(
     () => ({
-      users: chaosHighlights?.users.length ?? 0,
-      transactions: chaosHighlights?.transactions.length ?? 0,
-      activity_logs: chaosHighlights?.activityLogs.length ?? 0,
-      feature_flags: chaosHighlights?.featureFlags.length ?? 0,
+      users: chaosHighlights?.userChanges ?? 0,
+      transactions: chaosHighlights?.transactionChanges ?? 0,
+      activity_logs: chaosHighlights?.activityLogChanges ?? 0,
+      feature_flags: chaosHighlights?.featureFlagChanges ?? 0,
     }),
     [chaosHighlights],
   )
@@ -443,17 +439,17 @@ const Chatbot: React.FC = () => {
 
     switch (activeTab) {
       case 'users':
-        return renderUsersTable(sandboxData.users, chaosHighlights?.users ?? [])
+        return renderUsersTable(sandboxData.users, Array.from(changedRowIdSet))
       case 'transactions':
-        return renderTransactionsTable(sandboxData.transactions, chaosHighlights?.transactions ?? [])
+        return renderTransactionsTable(sandboxData.transactions, Array.from(changedRowIdSet))
       case 'activity_logs':
-        return renderActivityLogsTable(sandboxData.activity_logs, chaosHighlights?.activityLogs ?? [])
+        return renderActivityLogsTable(sandboxData.activity_logs, Array.from(changedRowIdSet))
       case 'feature_flags':
-        return renderFeatureFlagsTable(sandboxData.feature_flags, chaosHighlights?.featureFlags ?? [])
+        return renderFeatureFlagsTable(sandboxData.feature_flags, changedFeatureFlags)
       default:
         return null
     }
-  }, [activeTab, chaosHighlights, sandboxData])
+  }, [activeTab, changedFeatureFlags, changedRowIdSet, sandboxData])
 
   async function handleSubmit() {
     const description = inputText.trim()
@@ -467,6 +463,8 @@ const Chatbot: React.FC = () => {
     setChaosIndicator(null)
     setExpiredSandboxMessage(null)
     setChaosHighlights(null)
+    setChangedRowIds([])
+    setChangedFeatureFlags([])
 
     try {
       const result = await generateSandbox(description)
@@ -493,11 +491,50 @@ const Chatbot: React.FC = () => {
     const chaosType = chaosTypes[Math.floor(Math.random() * chaosTypes.length)]
 
     try {
-      const previousData = sandbox.data
+      preChaosData.current = sandboxData ? JSON.parse(JSON.stringify(sandboxData)) as LoadedSandboxData : null
       const result = await applyChaos(sandbox.sandbox_id, chaosType)
-      const nextHighlights = createChaosHighlights(previousData, result.data, result.chaos_applied)
+      const changedIds = new Set<string>()
+      const snapshot = preChaosData.current
+
+      result.data.users.forEach((newRow) => {
+        const oldRow = snapshot?.users?.find((row) => row.id === newRow.id)
+        if (!oldRow || JSON.stringify(oldRow) !== JSON.stringify(newRow)) {
+          changedIds.add(newRow.id)
+        }
+      })
+
+      result.data.transactions.forEach((newRow) => {
+        const oldRow = snapshot?.transactions?.find((row) => row.id === newRow.id)
+        if (!oldRow || JSON.stringify(oldRow) !== JSON.stringify(newRow)) {
+          changedIds.add(newRow.id)
+        }
+      })
+
+      result.data.activity_logs.forEach((newRow) => {
+        const oldRow = snapshot?.activity_logs?.find((row) => row.id === newRow.id)
+        if (!oldRow || JSON.stringify(oldRow) !== JSON.stringify(newRow)) {
+          changedIds.add(newRow.id)
+        }
+      })
+
+      const changedUsers = result.data.users.filter((row) => changedIds.has(row.id)).length
+      const changedTransactions = result.data.transactions.filter((row) => changedIds.has(row.id)).length
+      const changedActivityLogs = result.data.activity_logs.filter((row) => changedIds.has(row.id)).length
+      const featureFlags = getChangedFeatureFlags(
+        snapshot?.feature_flags ?? {},
+        result.data.feature_flags,
+      )
+      const nextHighlights = createChaosHighlights(
+        changedUsers,
+        changedTransactions,
+        changedActivityLogs,
+        featureFlags.length,
+        result.chaos_applied,
+      )
       setSandbox(result)
       setChaosHighlights(nextHighlights)
+      setChangedRowIds(Array.from(changedIds))
+      setChangedFeatureFlags(featureFlags)
       setChaosIndicator(`Chaos injected: ${formatChaosLabel(result.chaos_applied)}`)
     } catch (error) {
       setErrorMessage(getErrorMessage(error))
@@ -538,6 +575,8 @@ const Chatbot: React.FC = () => {
     setChaosIndicator(null)
     setExpiredSandboxMessage(null)
     setChaosHighlights(null)
+    setChangedRowIds([])
+    setChangedFeatureFlags([])
     clearSandboxUrl()
   }
 
