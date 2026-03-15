@@ -50,7 +50,7 @@ export async function storeMemory(scenario: StoreMemoryScenario): Promise<StoreM
   }
   const next = [entry, ...existing].slice(0, 50)
   const now = new Date().toISOString()
-  const domains = next.slice(0, 10).map((s: { domain?: string }) => s.domain ?? 'unknown').join(', ')
+  const domains = (next as Array<{ domain?: string }>).slice(0, 10).map((s) => s.domain ?? 'unknown').join(', ')
   const productContext = `User has built sandboxes for: ${domains}`
 
   if (data !== null && data !== undefined) {
