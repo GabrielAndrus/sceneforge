@@ -1,4 +1,6 @@
 import 'dotenv/config'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
@@ -333,6 +335,10 @@ type ChaosDiff = {
     dashboard_metrics?: Partial<SandboxData['dashboard_metrics']>
   }
 }
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const distPath = path.join(__dirname, '../dist')
+app.use(express.static(distPath))
 
 app.use(cors())
 app.use(express.json({ limit: '10mb' }))
@@ -1160,6 +1166,9 @@ app.delete(
     response.json({ success: true })
   }),
 )
+app.get('*', (_req: Request, res: Response) => {
+  res.sendFile(path.join(distPath, 'index.html'))
+})
 
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
   void _request
