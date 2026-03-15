@@ -10,7 +10,10 @@ import {
   getSandboxes,
   getTemplates,
   saveTemplate,
+  testEndpoint,
   type ActivityLogRecord,
+  type EndpointTestRecordResult,
+  type EndpointTestResponse,
   type PrimaryEntityRecord,
   type QAReport,
   type SandboxSummary,
@@ -28,7 +31,7 @@ const examplePrompts = [
 ]
 
 const chaosTypes = ['failed_payment', 'permission_conflict', 'data_anomaly'] as const
-type TabId = 'users' | 'primary_entities' | 'activity_logs' | 'feature_flags'
+type TabId = 'users' | 'primary_entities' | 'activity_logs' | 'feature_flags' | 'endpoint_tester'
 type LoadedSandboxData = NonNullable<SandboxResponse['data']>
 type ChaosHighlights = {
   chaosSummary: string
@@ -429,6 +432,14 @@ const Chatbot: React.FC = () => {
   const [reportModalContent, setReportModalContent] = useState<QAReport | null>(null)
   const [isGeneratingReport, setIsGeneratingReport] = useState(false)
   const preChaosDataRef = useRef<LoadedSandboxData | null>(null)
+  const [endpointTargetUrl, setEndpointTargetUrl] = useState('')
+  const [endpointMethod, setEndpointMethod] = useState<'GET' | 'POST' | 'PUT' | 'DELETE'>('POST')
+  const [endpointEntityType, setEndpointEntityType] = useState<'users' | 'primary_entities' | 'activity_logs'>('primary_entities')
+  const [injectChaos, setInjectChaos] = useState(false)
+  const [isRunningEndpointTest, setIsRunningEndpointTest] = useState(false)
+  const [endpointLastResponse, setEndpointLastResponse] = useState<EndpointTestResponse | null>(null)
+  const [endpointDisplayedResults, setEndpointDisplayedResults] = useState<EndpointTestRecordResult[]>([])
+  const [endpointError, setEndpointError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -866,6 +877,109 @@ const Chatbot: React.FC = () => {
     URL.revokeObjectURL(url)
   }
 
+  async function handleRunEndpointTest(useChaos: boolean) {
+    if (!sandbox || isRunningEndpointTest) return
+    const url = (useChaos ? endpointTargetUrl : endpointTargetUrl) || endpointTargetUrl.trim()
+    if (!url) {
+      setEndpointError('Enter a target URL.')
+      return
+    }
+    setEndpointError(null)
+    setEndpointDisplayedResults([])
+    setEndpointLastResponse(null)
+    setIsRunningEndpointTest(true)
+    const doChaos = useChaos || injectChaos
+    try {
+      const res = await testEndpoint({
+        sandbox_id: sandbox.sandbox_id,
+        target_url: url,
+        http_method: endpointMethod,
+        entity_type: endpointEntityType,
+        inject_chaos: doChaos,
+      })
+      setEndpointLastResponse(res)
+      setEndpointDisplayedResults([])
+      const results = res.test_results
+      for (let i = 0; i < results.length; i++) {
+        await new Promise((r) => setTimeout(r, 80 + Math.random() * 70))
+        setEndpointDisplayedResults((prev) => [...prev, results[i]])
+      }
+    } catch (err) {
+      const msg = getErrorMessage(err)
+      const unreachable = /fetch|network|failed to fetch|could not reach/i.test(msg)
+      setEndpointError(unreachable ? `Could not reach ${url} — make sure your server is running.` : msg)
+    } finally {
+      setIsRunningEndpointTest(false)
+    }
+  }
+
+  function handleDownloadEndpointReport() {
+    const res = endpointLastResponse
+    if (!res) return
+    const lines: string[] = []
+    lines.push('ENDPOINT TEST REPORT')
+    lines.push('')
+    lines.push(`Target: ${endpointTargetUrl}`)
+    lines.push(`Method: ${endpointMethod}`)
+    lines.push(`Entity: ${endpointEntityType}`)
+    lines.push(`Total: ${res.total}  Passed: ${res.passed}  Failed: ${res.failed}`)
+    lines.push('')
+    lines.push('PER-REQUEST RESULTS')
+    lines.push('───────────────────')
+    res.test_results.forEach((t) => {
+      lines.push(`${t.ok ? '✓' : '✗'} ${t.record_id}  ${t.status || 'error'}  ${t.duration_ms}ms  ${t.error ?? (t.response_body ?? '').slice(0, 80)}`)
+    })
+    const a = res.analysis
+    if (a) {
+      lines.push('')
+      lines.push('SUMMARY')
+      lines.push('────────')
+      lines.push(a.summary ?? '')
+      lines.push('')
+      if (a.findings?.length) {
+        lines.push('FINDINGS')
+        lines.push('────────')
+        a.findings.forEach((f) => {
+          lines.push(`[${(f.severity ?? '').toUpperCase()}] ${f.title ?? ''}`)
+          lines.push(`  ${f.description ?? ''}`)
+        })
+        lines.push('')
+      }
+      if (a.test_cases?.length) {
+        lines.push('TEST CASES')
+        lines.push('──────────')
+        a.test_cases.forEach((tc) => {
+          lines.push(`${tc.id ?? '—'} [${(tc.status ?? '').toUpperCase()}] ${tc.title ?? ''}`)
+          lines.push(`  Scenario: ${tc.scenario ?? ''}`)
+          lines.push(`  Expected: ${tc.expected_result ?? ''}`)
+          lines.push(`  Actual: ${tc.actual_result ?? ''}`)
+        })
+        lines.push('')
+      }
+      if (a.recommended_fixes?.length) {
+        lines.push('RECOMMENDED FIXES')
+        lines.push('─────────────────')
+        a.recommended_fixes.forEach((r) => {
+          lines.push(`${r.priority ?? ''}. ${r.fix ?? ''}`)
+          lines.push(`   ${r.rationale ?? ''}`)
+        })
+      }
+      if (a.chaos_findings) {
+        lines.push('')
+        lines.push('CHAOS FINDINGS')
+        lines.push('──────────────')
+        lines.push(a.chaos_findings)
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+    const blobUrl = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = blobUrl
+    anchor.download = `endpoint-test-${new Date().toISOString().slice(0, 10)}.txt`
+    anchor.click()
+    URL.revokeObjectURL(blobUrl)
+  }
+
   function handleSaveTemplate() {
     if (!sandbox || isSavingTemplate) {
       return
@@ -1295,6 +1409,7 @@ const Chatbot: React.FC = () => {
                     { id: 'primary_entities' as const, label: primaryEntityTabLabel, hidden: false },
                     { id: 'activity_logs' as const, label: 'Activity Logs', hidden: currentPermissionTier === 'restricted' },
                     { id: 'feature_flags' as const, label: 'Feature Flags', hidden: false },
+                    { id: 'endpoint_tester' as const, label: 'Endpoint Tester', hidden: false },
                   ]
                     .filter((tab) => !tab.hidden)
                     .map((tab) => (
@@ -1304,8 +1419,13 @@ const Chatbot: React.FC = () => {
                       className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
                       onClick={() => setActiveTab(tab.id)}
                     >
+                      {tab.id === 'endpoint_tester' ? (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="tab-icon">
+                          <path d="M10 2v7.31" /><path d="M14 9.3V2" /><path d="M8.5 2h7" /><path d="M14 9.3a6 6 0 1 1-4 11.2" /><path d="M10 9.3a6 6 0 0 0 4 11.2" />
+                        </svg>
+                      ) : null}
                       <span className="tab-label">{tab.label}</span>
-                      {tabChangeCounts[tab.id] > 0 ? (
+                      {tab.id !== 'endpoint_tester' && tabChangeCounts[tab.id] > 0 ? (
                         <span className="tab-badge">{tabChangeCounts[tab.id]}</span>
                       ) : null}
                     </button>
@@ -1313,7 +1433,7 @@ const Chatbot: React.FC = () => {
                 </div>
               </div>
 
-              {chaosHighlights && !isChaosBannerDismissed ? (
+              {chaosHighlights && !isChaosBannerDismissed && activeTab !== 'endpoint_tester' ? (
                 <div className="chaos-banner">
                   <span className="chaos-banner-text">
                     {`${chaosHighlights.chaosSummary} — ${chaosHighlights.totalChanges} changes across ${chaosHighlights.changedTabs} tables`}
@@ -1329,11 +1449,200 @@ const Chatbot: React.FC = () => {
                 </div>
               ) : null}
 
-              <div className="table-shell glass">
-                <div key={activeTab} className="table-fade-panel">
-                  {activeTable}
+              {activeTab === 'endpoint_tester' ? (
+                <div className="endpoint-tester-panel glass">
+                  <div className="endpoint-tester-header">
+                    <h3 className="endpoint-tester-title">ENDPOINT TESTER</h3>
+                    <div className="endpoint-tester-divider">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+                  </div>
+                  <div className="endpoint-tester-form">
+                    <div className="endpoint-form-row">
+                      <label className="endpoint-label">Target URL</label>
+                      <input
+                        type="url"
+                        className="endpoint-input"
+                        placeholder="http://localhost:4000/api/your-endpoint"
+                        value={endpointTargetUrl}
+                        onChange={(e) => setEndpointTargetUrl(e.target.value)}
+                        disabled={isRunningEndpointTest}
+                      />
+                    </div>
+                    <div className="endpoint-form-row endpoint-form-inline">
+                      <div className="endpoint-field">
+                        <label className="endpoint-label">Method</label>
+                        <select
+                          className="endpoint-select"
+                          value={endpointMethod}
+                          onChange={(e) => setEndpointMethod(e.target.value as 'GET' | 'POST' | 'PUT' | 'DELETE')}
+                          disabled={isRunningEndpointTest}
+                        >
+                          <option value="GET">GET</option>
+                          <option value="POST">POST</option>
+                          <option value="PUT">PUT</option>
+                          <option value="DELETE">DELETE</option>
+                        </select>
+                      </div>
+                      <div className="endpoint-field">
+                        <label className="endpoint-label">Entity</label>
+                        <select
+                          className="endpoint-select"
+                          value={endpointEntityType}
+                          onChange={(e) => setEndpointEntityType(e.target.value as 'users' | 'primary_entities' | 'activity_logs')}
+                          disabled={isRunningEndpointTest}
+                        >
+                          <option value="users">Users</option>
+                          <option value="primary_entities">{primaryEntityTabLabel}</option>
+                          <option value="activity_logs">Activity Logs</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="endpoint-form-row endpoint-form-checkbox">
+                      <label className="endpoint-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={injectChaos}
+                          onChange={(e) => setInjectChaos(e.target.checked)}
+                          disabled={isRunningEndpointTest}
+                        />
+                        <span>Inject Chaos — test with edge case data</span>
+                      </label>
+                    </div>
+                    <div className="endpoint-form-actions">
+                      <button
+                        type="button"
+                        className="endpoint-btn primary"
+                        onClick={() => void handleRunEndpointTest(false)}
+                        disabled={!sandbox || isRunningEndpointTest}
+                      >
+                        Run Tests
+                      </button>
+                      <button
+                        type="button"
+                        className="endpoint-btn chaos-shortcut"
+                        onClick={() => void handleRunEndpointTest(true)}
+                        disabled={!sandbox || isRunningEndpointTest}
+                      >
+                        Run with Chaos
+                      </button>
+                      {endpointLastResponse ? (
+                        <button
+                          type="button"
+                          className="endpoint-btn secondary"
+                          onClick={handleDownloadEndpointReport}
+                        >
+                          Download Report
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {endpointError ? (
+                    <div className="endpoint-error">{endpointError}</div>
+                  ) : null}
+                  {(isRunningEndpointTest || endpointDisplayedResults.length > 0 || endpointLastResponse) ? (
+                    <div className="endpoint-live-feed">
+                      <div className="endpoint-feed-header">
+                        {isRunningEndpointTest ? (
+                          <>→ Firing requests at {endpointTargetUrl || '…'}...</>
+                        ) : endpointLastResponse ? (
+                          <>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</>
+                        ) : null}
+                      </div>
+                      {endpointDisplayedResults.map((r, i) => (
+                        <div key={`${r.record_id}-${i}`} className={`endpoint-feed-line ${r.ok ? 'pass' : 'fail'}`}>
+                          {r.ok ? '✓' : '✗'} {r.record_id}  {r.status || 'timeout'} {r.status ? (r.ok ? 'OK' : 'Error') : ''}  ({r.duration_ms}ms)
+                        </div>
+                      ))}
+                      {endpointLastResponse && !isRunningEndpointTest && endpointDisplayedResults.length === endpointLastResponse.test_results.length ? (
+                        <div className="endpoint-feed-summary">
+                          {endpointLastResponse.passed} passed  {endpointLastResponse.failed} failed
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {endpointLastResponse && !isRunningEndpointTest ? (
+                    <div className="endpoint-report-panel">
+                      {(() => {
+                        const a = endpointLastResponse.analysis
+                        if (!a) return null
+                        return (
+                          <>
+                            {a.summary ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Summary</h4>
+                                <p className="endpoint-report-summary">{a.summary}</p>
+                              </section>
+                            ) : null}
+                            <section className="endpoint-report-section">
+                              <h4 className="endpoint-report-section-title">Pass / Fail</h4>
+                              <div className="endpoint-stats-bar">
+                                <span className="endpoint-stats-pass" style={{ width: `${endpointLastResponse.total ? (endpointLastResponse.passed / endpointLastResponse.total) * 100 : 0}%` }} />
+                                <span className="endpoint-stats-fail" style={{ width: `${endpointLastResponse.total ? (endpointLastResponse.failed / endpointLastResponse.total) * 100 : 0}%` }} />
+                              </div>
+                              <p className="endpoint-stats-text">{endpointLastResponse.passed} passed, {endpointLastResponse.failed} failed (avg {a.avg_response_time_ms ?? 0}ms)</p>
+                            </section>
+                            {a.findings?.length ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Findings</h4>
+                                <div className="endpoint-findings-list">
+                                  {a.findings.map((f, i) => (
+                                    <div key={i} className="endpoint-finding-card">
+                                      <span className={`endpoint-severity-badge severity-${(f.severity ?? 'info').toLowerCase()}`}>{(f.severity ?? 'info').toUpperCase()}</span>
+                                      <strong>{f.title ?? '—'}</strong>
+                                      <p>{f.description ?? ''}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </section>
+                            ) : null}
+                            {a.test_cases?.length ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Test Cases</h4>
+                                <div className="endpoint-test-cases-list">
+                                  {a.test_cases.map((tc, i) => (
+                                    <div key={i} className="endpoint-tc-card">
+                                      <div className="endpoint-tc-header">
+                                        <span className="endpoint-tc-id">{tc.id ?? `TC-${String(i + 1).padStart(3, '0')}`}</span>
+                                        <span className={`endpoint-tc-status ${(tc.status ?? 'warning').toLowerCase()}`}>{(tc.status ?? 'warning').toUpperCase()}</span>
+                                        <span className="endpoint-tc-priority">{(tc.priority ?? 'medium').toUpperCase()}</span>
+                                      </div>
+                                      <p className="endpoint-tc-title">{tc.title ?? '—'}</p>
+                                      <p className="endpoint-tc-scenario">{tc.scenario ?? '—'}</p>
+                                      <p className="endpoint-tc-expected">Expected: {tc.expected_result ?? '—'}</p>
+                                      <p className="endpoint-tc-actual">Actual: {tc.actual_result ?? '—'}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </section>
+                            ) : null}
+                            {a.recommended_fixes?.length ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Recommended Fixes</h4>
+                                <ol className="endpoint-fixes-list">
+                                  {a.recommended_fixes.map((r, i) => (
+                                    <li key={i}><strong>{r.priority ?? i + 1}. {r.fix ?? '—'}</strong> {r.rationale ?? ''}</li>
+                                  ))}
+                                </ol>
+                              </section>
+                            ) : null}
+                            {a.chaos_findings ? (
+                              <section className="endpoint-report-section">
+                                <h4 className="endpoint-report-section-title">Chaos Findings</h4>
+                                <p className="endpoint-chaos-findings">{a.chaos_findings}</p>
+                              </section>
+                            ) : null}
+                          </>
+                        )
+                      })()}
+                    </div>
+                  ) : null}
                 </div>
-              </div>
+              ) : (
+                <div className="table-shell glass">
+                  <div key={activeTab} className="table-fade-panel">
+                    {activeTable}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className={`empty-state ${expiredSandboxMessage ? 'expired-state' : ''}`}>

@@ -164,6 +164,52 @@ Generate a detailed QA report as pure JSON with this exact structure:
 
 Return only valid JSON. No markdown, no explanation.`
 
+const ENDPOINT_TEST_ANALYSIS_PROMPT = `You are a QA engineer analyzing HTTP test results from firing synthetic data at a real API endpoint.
+
+You will receive:
+- The target URL that was tested
+- The HTTP method used
+- Each request's record ID, response status, duration, and response body
+- Whether chaos (broken/edge case data) was used
+
+Analyze the results and return pure JSON:
+{
+  "summary": "2-3 sentence summary of overall endpoint health",
+  "total_requests": number,
+  "passed": number,
+  "failed": number,
+  "avg_response_time_ms": number,
+  "findings": [
+    {
+      "severity": "critical | high | medium | low | info",
+      "title": "Finding title",
+      "description": "Specific finding referencing actual record IDs and response codes",
+      "affected_records": ["record_id_1", "record_id_2"]
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "TC-001",
+      "title": "Test case title",
+      "scenario": "Given/When/Then",
+      "expected_result": "What should happen",
+      "actual_result": "What actually happened",
+      "status": "pass | fail | warning",
+      "priority": "high | medium | low"
+    }
+  ],
+  "recommended_fixes": [
+    {
+      "priority": 1,
+      "fix": "What to fix",
+      "rationale": "Why"
+    }
+  ],
+  "chaos_findings": "If chaos was used, what additional vulnerabilities were exposed. Otherwise null or empty string."
+}
+
+Return only valid JSON. No markdown.`
+
 type MemoryRow = {
   id: string
   product_context: string | null
@@ -224,6 +270,40 @@ type QAReportPayload = {
     fix?: string
     rationale?: string
   }>
+}
+
+type EndpointTestRecordResult = {
+  record_id: string
+  status: number
+  ok: boolean
+  duration_ms: number
+  response_body: string | null
+  error: string | null
+}
+
+type EndpointTestAnalysisPayload = {
+  summary?: string
+  total_requests?: number
+  passed?: number
+  failed?: number
+  avg_response_time_ms?: number
+  findings?: Array<{
+    severity?: string
+    title?: string
+    description?: string
+    affected_records?: string[]
+  }>
+  test_cases?: Array<{
+    id?: string
+    title?: string
+    scenario?: string
+    expected_result?: string
+    actual_result?: string
+    status?: string
+    priority?: string
+  }>
+  recommended_fixes?: Array<{ priority?: number; fix?: string; rationale?: string }>
+  chaos_findings?: string | null
 }
 
 type ChaosMutation<TChanges> = {
@@ -789,6 +869,139 @@ app.post(
     response.status(201).json({
       report_id: reportId,
       report,
+    })
+  }),
+)
+
+const ENDPOINT_TEST_CHAOS_TYPE = 'data_anomaly'
+
+app.post(
+  '/api/test-endpoint',
+  asyncRoute(async (request, response) => {
+    const sandboxId =
+      typeof request.body.sandbox_id === 'string' ? request.body.sandbox_id.trim() : ''
+    const targetUrl =
+      typeof request.body.target_url === 'string' ? request.body.target_url.trim() : ''
+    const httpMethod =
+      request.body.http_method === 'GET' || request.body.http_method === 'POST' ||
+      request.body.http_method === 'PUT' || request.body.http_method === 'DELETE'
+        ? request.body.http_method
+        : 'GET'
+    const entityType =
+      request.body.entity_type === 'users' || request.body.entity_type === 'primary_entities' ||
+      request.body.entity_type === 'activity_logs'
+        ? request.body.entity_type
+        : 'primary_entities'
+    const injectChaos = Boolean(request.body.inject_chaos)
+
+    if (!sandboxId || !targetUrl) {
+      response.status(400).json({ error: 'sandbox_id and target_url are required.' })
+      return
+    }
+
+    ensureSupabaseEnv()
+    const sandbox = await getSandboxById(sandboxId)
+    let dataToUse = sandbox.data
+
+    if (injectChaos) {
+      const prompt = [
+        `Chaos type: ${ENDPOINT_TEST_CHAOS_TYPE}`,
+        `Current sandbox description: ${sandbox.description}`,
+        `Current sandbox data: ${JSON.stringify(sandbox.data)}`,
+        'Return only raw JSON.',
+      ].join('\n\n')
+      const rawJson = await requestModelJson(CHAOS_SYSTEM_PROMPT, prompt)
+      const diff = parseChaosDiff(rawJson)
+      const { mutatedData } = applyChaosDiff(sandbox.data, diff)
+      dataToUse = mutatedData
+    }
+
+    const records: Array<Record<string, unknown> & { id: string }> =
+      entityType === 'users'
+        ? (dataToUse.users as Array<Record<string, unknown> & { id: string }>)
+        : entityType === 'activity_logs'
+          ? (dataToUse.activity_logs as Array<Record<string, unknown> & { id: string }>)
+          : (dataToUse.primary_entities as Array<Record<string, unknown> & { id: string }>)
+
+    if (!Array.isArray(records) || records.length === 0) {
+      response.status(400).json({ error: `No records found for entity_type "${entityType}".` })
+      return
+    }
+
+    const results = await Promise.allSettled(
+      records.map(async (record) => {
+        const start = Date.now()
+        try {
+          const res = await fetch(targetUrl, {
+            method: httpMethod,
+            headers: { 'Content-Type': 'application/json' },
+            body: httpMethod !== 'GET' ? JSON.stringify(record) : undefined,
+            signal: AbortSignal.timeout(5000),
+          })
+          const duration = Date.now() - start
+          const body = await res.text()
+          return {
+            record_id: record.id,
+            status: res.status,
+            ok: res.ok,
+            duration_ms: duration,
+            response_body: body.slice(0, 500),
+            error: null,
+          } satisfies EndpointTestRecordResult
+        } catch (err: unknown) {
+          return {
+            record_id: record.id,
+            status: 0,
+            ok: false,
+            duration_ms: Date.now() - start,
+            response_body: null,
+            error: err instanceof Error ? err.message : String(err),
+          } satisfies EndpointTestRecordResult
+        }
+      }),
+    )
+
+    const testResults: EndpointTestRecordResult[] = results.map((r) =>
+      r.status === 'fulfilled' ? r.value : { record_id: 'unknown', status: 0, ok: false, duration_ms: 0, response_body: null, error: 'Promise rejected' },
+    )
+
+    const passed = testResults.filter((t) => t.ok).length
+    const failed = testResults.filter((t) => !t.ok).length
+    const total = testResults.length
+    const avgResponseTimeMs =
+      total > 0 ? Math.round(testResults.reduce((sum, t) => sum + t.duration_ms, 0) / total) : 0
+
+    let analysis: EndpointTestAnalysisPayload = {}
+    try {
+      const analysisPrompt = [
+        `Target URL: ${targetUrl}`,
+        `HTTP method: ${httpMethod}`,
+        `Entity type: ${entityType}`,
+        `Inject chaos: ${injectChaos}`,
+        '',
+        'Per-request results:',
+        JSON.stringify(testResults, null, 2),
+        '',
+        'Return only valid JSON.',
+      ].join('\n')
+      const rawAnalysis = await requestModelJson(ENDPOINT_TEST_ANALYSIS_PROMPT, analysisPrompt)
+      analysis = JSON.parse(rawAnalysis.trim()) as EndpointTestAnalysisPayload
+    } catch {
+      analysis = {
+        summary: 'Analysis could not be generated.',
+        total_requests: total,
+        passed,
+        failed,
+        avg_response_time_ms: avgResponseTimeMs,
+      }
+    }
+
+    response.json({
+      test_results: testResults,
+      analysis,
+      total,
+      passed,
+      failed,
     })
   }),
 )

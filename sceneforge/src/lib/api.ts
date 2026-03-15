@@ -109,6 +109,52 @@ export type ReportResponse = {
   report: QAReport
 }
 
+export type EndpointTestRecordResult = {
+  record_id: string
+  status: number
+  ok: boolean
+  duration_ms: number
+  response_body: string | null
+  error: string | null
+}
+
+export type EndpointTestFinding = {
+  severity?: string
+  title?: string
+  description?: string
+  affected_records?: string[]
+}
+
+export type EndpointTestTestCase = {
+  id?: string
+  title?: string
+  scenario?: string
+  expected_result?: string
+  actual_result?: string
+  status?: string
+  priority?: string
+}
+
+export type EndpointTestAnalysis = {
+  summary?: string
+  total_requests?: number
+  passed?: number
+  failed?: number
+  avg_response_time_ms?: number
+  findings?: EndpointTestFinding[]
+  test_cases?: EndpointTestTestCase[]
+  recommended_fixes?: Array<{ priority?: number; fix?: string; rationale?: string }>
+  chaos_findings?: string | null
+}
+
+export type EndpointTestResponse = {
+  test_results: EndpointTestRecordResult[]
+  analysis: EndpointTestAnalysis
+  total: number
+  passed: number
+  failed: number
+}
+
 // Base URL for API: in dev use '' so requests go to same origin and Vite proxy forwards /api to http://localhost:3001.
 // In prod use VITE_API_URL or fallback to http://localhost:3001. All paths are relative (e.g. /api/report).
 const API_URL = import.meta.dev
@@ -204,6 +250,21 @@ export function generateReport(payload: {
   chaos_type: string
 }) {
   return apiRequest<ReportResponse>('/api/report', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export type EndpointTestEntityType = 'users' | 'primary_entities' | 'activity_logs'
+
+export function testEndpoint(payload: {
+  sandbox_id: string
+  target_url: string
+  http_method: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  entity_type: EndpointTestEntityType
+  inject_chaos: boolean
+}) {
+  return apiRequest<EndpointTestResponse>('/api/test-endpoint', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
