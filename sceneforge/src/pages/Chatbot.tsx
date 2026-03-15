@@ -1458,14 +1458,25 @@ const Chatbot: React.FC = () => {
                   <div className="endpoint-tester-form">
                     <div className="endpoint-form-row">
                       <label className="endpoint-label">Target URL</label>
-                      <input
-                        type="url"
-                        className="endpoint-input"
-                        placeholder="http://localhost:4000/api/your-endpoint"
-                        value={endpointTargetUrl}
-                        onChange={(e) => setEndpointTargetUrl(e.target.value)}
-                        disabled={isRunningEndpointTest}
-                      />
+                      <div className="endpoint-url-row">
+                        <input
+                          type="url"
+                          className="endpoint-input"
+                          placeholder="http://localhost:4000/api/your-endpoint"
+                          value={endpointTargetUrl}
+                          onChange={(e) => setEndpointTargetUrl(e.target.value)}
+                          disabled={isRunningEndpointTest}
+                        />
+                        <button
+                          type="button"
+                          className="endpoint-btn demo-endpoint"
+                          onClick={() => setEndpointTargetUrl('http://localhost:3001/api/mock-endpoint')}
+                          disabled={isRunningEndpointTest}
+                          title="Use the built-in demo endpoint for realistic mixed results (200s, 400s, 402s, 403s, 500s)"
+                        >
+                          Use Demo Endpoint
+                        </button>
+                      </div>
                     </div>
                     <div className="endpoint-form-row endpoint-form-inline">
                       <div className="endpoint-field">

@@ -1643,6 +1643,18 @@
   gap: 16px;
 }
 
+.endpoint-url-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.endpoint-url-row .endpoint-input {
+  flex: 1;
+  min-width: 200px;
+}
+
 .endpoint-field {
   display: flex;
   flex-direction: column;
@@ -1751,6 +1763,16 @@
 
 .endpoint-btn.secondary {
   background: rgba(255, 255, 255, 0.06);
+}
+
+.endpoint-btn.demo-endpoint {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.endpoint-btn.demo-endpoint:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .endpoint-btn:disabled {

@@ -878,6 +878,41 @@ app.post(
   }),
 )
 
+app.post('/api/mock-endpoint', (request, response) => {
+  const body = request.body as Record<string, unknown>
+
+  if (!body?.id) {
+    response.status(400).json({ error: 'Missing required field: id' })
+    return
+  }
+  if (body.status === 'payment_suspended' || body.status === 'suspended') {
+    response.status(403).json({ error: 'Account suspended', code: 'ACCOUNT_SUSPENDED' })
+    return
+  }
+  if (typeof body.amount === 'number' && body.amount < 0) {
+    response.status(422).json({ error: 'Invalid amount: must be positive', code: 'INVALID_AMOUNT' })
+    return
+  }
+  if (body.status === 'failed') {
+    response.status(402).json({ error: 'Payment failed', code: 'PAYMENT_FAILED' })
+    return
+  }
+  if (body.action === 'entity_failed') {
+    response.status(500).json({ error: 'Internal processing error', code: 'PROCESSING_ERROR' })
+    return
+  }
+  if (Math.random() < 0.1) {
+    response.status(503).json({ error: 'Service temporarily unavailable' })
+    return
+  }
+
+  response.status(200).json({
+    success: true,
+    processed_id: body.id,
+    message: 'Record processed successfully',
+  })
+})
+
 const ENDPOINT_TEST_CHAOS_TYPE = 'data_anomaly'
 
 app.post(
