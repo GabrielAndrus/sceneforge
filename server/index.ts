@@ -1166,7 +1166,7 @@ app.delete(
     response.json({ success: true })
   }),
 )
-app.get('*', (_req: Request, res: Response) => {
+app.get('(.*)', (_req: Request, res: Response) => {
   res.sendFile(path.join(distPath, 'index.html'))
 })
 
