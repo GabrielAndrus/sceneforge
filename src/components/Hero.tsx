@@ -27,20 +27,20 @@ const Hero: React.FC = () => {
         </div>
         <div className="hero-stats">
           <div className="stat-item">
-            <span className="stat-number">10M+</span>
-            <span className="stat-label">Scenarios Generated</span>
+            <span className="stat-number"><2 min</span>
+            <span className="stat-label">SANDBOX GENERATED</span>
           </div>
           <div className="stat-item">
-            <span className="stat-number">99.9%</span>
-            <span className="stat-label">Schema Accuracy</span>
+            <span className="stat-number">7/7</span>
+            <span className="stat-label">CONSISTENCY CHECKS</span>
           </div>
           <div className="stat-item">
-            <span className="stat-number">50+</span>
-            <span className="stat-label">Database Types</span>
+            <span className="stat-number">Live</span>
+            <span className="stat-label">API ENDPOINT TESTING</span>
           </div>
           <div className="stat-item">
-            <span className="stat-number">500ms</span>
-            <span className="stat-label">Avg. Latency</span>
+            <span className="stat-number">100%</span>
+            <span className="stat-label">Zero Real Data</span>
           </div>
           <div className="stat-item">
             <span className="stat-number">24/7</span>
