@@ -27,16 +27,16 @@ const Hero: React.FC = () => {
         </div>
         <div className="hero-stats">
           <div className="stat-item">
-            <span className="stat-number"><2 min</span>
-            <span className="stat-label">SANDBOX GENERATED</span>
+            <span className="stat-number">2 min</span>
+            <span className="stat-label">Sandbox Generated</span>
           </div>
           <div className="stat-item">
             <span className="stat-number">7/7</span>
-            <span className="stat-label">CONSISTENCY CHECKS</span>
+            <span className="stat-label">Consistency Checks</span>
           </div>
           <div className="stat-item">
             <span className="stat-number">Live</span>
-            <span className="stat-label">API ENDPOINT TESTING</span>
+            <span className="stat-label">API endpoint testing</span>
           </div>
           <div className="stat-item">
             <span className="stat-number">100%</span>
