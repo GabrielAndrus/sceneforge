@@ -53,6 +53,7 @@ export async function storeMemory(scenario: StoreMemoryScenario): Promise<StoreM
   const domains = (next as Array<{ domain?: string }>).slice(0, 10).map((s) => s.domain ?? 'unknown').join(', ')
   const productContext = `User has built sandboxes for: ${domains}`
 
+  console.log(`[Memory] Stored scenario via Supabase: "${scenario.description.slice(0, 50)}"`)
   if (data !== null && data !== undefined) {
     await supabase
       .from('memory')
@@ -132,6 +133,11 @@ export async function retrieveMemory(query: string): Promise<string> {
     .slice(0, 3)
     .filter((s) => s.score > 0)
 
+  if (relevant.length > 0) {
+    console.log(`[Memory] Retrieved ${relevant.length} relevant scenarios via Supabase for query: "${query.slice(0, 50)}"`)
+  } else {
+    console.log(`[Memory] No relevant past scenarios found for query: "${query.slice(0, 50)}"`)
+  }
   if (relevant.length === 0) return ''
 
   const context = relevant
