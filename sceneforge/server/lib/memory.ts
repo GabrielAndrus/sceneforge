@@ -1,4 +1,4 @@
-import { supabase } from './supabase.js'
+import { supabase } from './supabase.ts'
 
 const MEMORY_ROW_ID = 'sceneforge-memory'
 const MOORCHEH_BASE = 'http://localhost:8000'
