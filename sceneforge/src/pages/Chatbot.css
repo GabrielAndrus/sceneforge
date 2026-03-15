@@ -1007,29 +1007,150 @@
 
 @media (max-width: 768px) {
   .chat-sidebar {
-    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 280px;
+    z-index: 2000;
+    transform: translateX(-100%);
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    background: rgba(10, 10, 14, 0.98);
+    display: flex; /* override hidden */
   }
-  
-  .example-grid {
-    grid-template-columns: 1fr;
+
+  .chat-sidebar.mobile-open {
+    transform: translateX(0);
   }
-  
-  .chat-input-container {
-    padding: 16px;
+
+  /* Overlay that appears behind the sidebar but above chat */
+  .mobile-sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 1000;
+    animation: fadeInOverlay 0.3s ease;
+  }
+
+  .mobile-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    flex-shrink: 0;
   }
 
   .chat-header {
-    flex-direction: column;
-    align-items: flex-start;
+    padding: 12px 24px;
+    gap: 16px;
+    flex-direction: row;
+    align-items: center;
+    border-bottom: 1px solid var(--glass-border);
+  }
+
+  /* We'll use these utilities to hide the original buttons in the header, 
+     and show them in the sidebar */
+  .desktop-only {
+    display: none !important;
+  }
+
+  .mobile-only {
+    display: flex !important;
   }
 
   .chat-header-actions {
-    flex-wrap: wrap;
+    display: none; /* Hidden on mobile header, moved to sidebar */
+  }
+
+  .header-title-row {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    gap: 12px;
+  }
+
+  .header-title-row h2 {
+    display: none; /* Hide 'Active Sandbox' text from header on mobile */
+  }
+
+  .chat-content {
+    padding: 24px 24px;
   }
 
   .metrics-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
   }
+
+  .example-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .example-btn {
+    padding: 16px 12px;
+    font-size: 13px;
+  }
+
+  .example-text {
+    font-size: 12px;
+  }
+
+  .chat-input-container {
+    padding: 16px 24px 24px 24px;
+  }
+
+  .input-wrapper {
+    flex-direction: row;
+    align-items: center;
+    padding: 8px 12px;
+    gap: 12px;
+  }
+
+  .chat-input {
+    min-height: 48px;
+    margin-bottom: 0;
+  }
+
+  .send-btn {
+    width: 48px;
+    height: 48px;
+    margin-left: 0;
+    margin-top: 0;
+    padding: 0;
+    flex-shrink: 0;
+  }
+}
+
+.mobile-only {
+  display: none;
+}
+
+/* Clear the global navbar on mobile */
+@media (max-width: 768px) {
+  .chatbot-layout {
+    height: 100vh;
+  }
+  
+  .chat-sidebar {
+    height: 100vh;
+    top: 0;
+  }
+  
+  .mobile-sidebar-overlay {
+    top: 0;
+  }
+}
+
+@keyframes fadeInOverlay {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* Modal Styling */

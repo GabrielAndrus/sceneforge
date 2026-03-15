@@ -96,6 +96,12 @@ button {
   padding: 0 40px;
 }
 
+@media (max-width: 768px) {
+  .container {
+    padding: 0 24px;
+  }
+}
+
 /* Selection */
 ::selection {
   background: rgba(255, 255, 255, 0.2);

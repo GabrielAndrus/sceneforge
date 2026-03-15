@@ -183,8 +183,8 @@ function getOrderedColumns(rows: TableRow[]): string[] {
     })
   })
 
-  const pinnedColumns = PINNED_COLUMNS.filter((key) => discoveredColumns.includes(key))
-  const remainingColumns = discoveredColumns.filter((key) => !PINNED_COLUMNS.includes(key))
+  const pinnedColumns = PINNED_COLUMNS.filter((key) => discoveredColumns.includes(key)) as string[]
+  const remainingColumns = discoveredColumns.filter((key) => !(PINNED_COLUMNS as readonly string[]).includes(key))
 
   return [...pinnedColumns, ...remainingColumns]
 }
@@ -384,6 +384,7 @@ const Chatbot: React.FC = () => {
   const [templateName, setTemplateName] = useState('')
   const [isCopyLinkSuccess, setIsCopyLinkSuccess] = useState(false)
   const [isChaosButtonFlashing, setIsChaosButtonFlashing] = useState(false)
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 
   useEffect(() => {
     if (!chaosIndicator) {
@@ -746,7 +747,11 @@ const Chatbot: React.FC = () => {
 
   return (
     <div className="chatbot-layout">
-      <aside className="chat-sidebar glass">
+      {isMobileSidebarOpen ? (
+        <div className="mobile-sidebar-overlay" onClick={() => setIsMobileSidebarOpen(false)} aria-hidden="true" />
+      ) : null}
+
+      <aside className={`chat-sidebar glass ${isMobileSidebarOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-header">
           <a href="/" className="logo-link">
             <span className="logo-text">
@@ -842,7 +847,48 @@ const Chatbot: React.FC = () => {
           </div>
         </div>
 
-        <div className="sidebar-footer">
+        {/* Mobile-only tools in the sidebar */}
+        <div className="sidebar-footer mobile-only" style={{ flexDirection: 'column', gap: '8px', padding: '16px', borderTop: '1px solid var(--glass-border)', background: 'rgba(255, 255, 255, 0.02)' }}>
+          <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px', wordBreak: 'break-all' }}>
+            Active: <span className="text-primary">{headerSandboxId}</span>
+          </div>
+          <button
+            type="button"
+            className={`header-action-btn danger ${isApplyingChaos ? 'chaos-loading' : ''} ${isChaosButtonFlashing ? 'chaos-success-flash' : ''}`}
+            onClick={handleChaos}
+            disabled={!sandbox || isApplyingChaos || isGenerating}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            {isApplyingChaos ? 'Injecting...' : 'Inject Chaos'}
+          </button>
+          
+          {isTemplateFormOpen ? (
+            <div className="template-inline-form" style={{ flexDirection: 'column', width: '100%' }}>
+              <input
+                type="text"
+                className="template-name-input"
+                placeholder="Template name"
+                value={templateName}
+                onChange={(event) => setTemplateName(event.target.value)}
+                style={{ width: '100%', marginBottom: '8px' }}
+              />
+              <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                <button type="button" className="header-inline-btn" onClick={() => void handleConfirmSaveTemplate()} disabled={!templateName.trim() || isSavingTemplate} style={{ flex: 1 }}>Save</button>
+                <button type="button" className="header-inline-btn" onClick={() => { setIsTemplateFormOpen(false); setTemplateName(''); }} style={{ flex: 1 }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" className="header-action-btn" onClick={handleSaveTemplate} disabled={!sandbox || isSavingTemplate || isGenerating} style={{ width: '100%', justifyContent: 'center' }}>
+              Save Template
+            </button>
+          )}
+
+          <button type="button" className="header-action-btn" onClick={handleReset} style={{ width: '100%', justifyContent: 'center' }}>
+            Reset Sandbox
+          </button>
+        </div>
+
+        <div className="sidebar-footer desktop-only">
           <button type="button" className="view-db-btn" disabled>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
@@ -858,7 +904,19 @@ const Chatbot: React.FC = () => {
         <header className="chat-header glass">
           <div className="chat-header-copy">
             <div className="header-title-row">
-              <h2>
+              <button
+                type="button"
+                className="mobile-menu-btn"
+                onClick={() => setIsMobileSidebarOpen(true)}
+                aria-label="Open menu"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="3" y1="12" x2="21" y2="12"></line>
+                  <line x1="3" y1="6" x2="21" y2="6"></line>
+                  <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+              </button>
+              <h2 className="desktop-only">
                 Active Sandbox: <span className="text-secondary">{headerSandboxId}</span>
               </h2>
               <button
@@ -873,7 +931,7 @@ const Chatbot: React.FC = () => {
             {chaosIndicator ? <span className="chaos-indicator">{chaosIndicator}</span> : null}
             {statusMessage ? <span className="status-indicator">{statusMessage}</span> : null}
           </div>
-          <div className="chat-header-actions">
+          <div className="chat-header-actions desktop-only">
             <button
               type="button"
               className={`header-action-btn danger ${isApplyingChaos ? 'chaos-loading' : ''} ${isChaosButtonFlashing ? 'chaos-success-flash' : ''}`}
