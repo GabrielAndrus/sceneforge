@@ -34,11 +34,11 @@ const featuresData = [
 ];
 
 const Features: React.FC = () => {
-  const constraintRef = React.useRef<HTMLElement | null>(null);
+  const constraintRef = React.useRef<HTMLDivElement | null>(null);
   const [isMounted, setIsMounted] = React.useState(false);
 
   React.useEffect(() => {
-    constraintRef.current = document.documentElement;
+    constraintRef.current = document.documentElement as unknown as HTMLDivElement;
     setIsMounted(true);
   }, []);
 
@@ -70,7 +70,7 @@ const Features: React.FC = () => {
         </div>
         
         <div className="terminals-layout">
-          <div className="demo-container">
+          <div className="demo-container" ref={constraintRef}>
             <motion.div 
               className="interactive-demo terminal-1 glass"
               drag

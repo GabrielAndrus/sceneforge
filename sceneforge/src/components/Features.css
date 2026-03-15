@@ -281,24 +281,27 @@
   }
 
   .terminals-layout {
-    min-height: auto;
+    min-height: 380px;
+    padding-bottom: 20px;
+    overflow: visible;
   }
 
   .demo-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 32px;
+    display: block;
+    position: relative;
+    width: 100%;
+    margin: 0 auto;
+    overflow: visible;
   }
 
   .interactive-demo {
-    position: relative;
-    width: 100%;
-    max-width: 600px;
-    top: auto;
-    left: auto;
+    position: absolute;
+    width: 90%;
+    max-width: 500px;
+    left: 5%;
     right: auto;
-    margin-bottom: 32px;
+    top: 40px;
+    margin-bottom: 0;
   }
 
   .terminal-2 {
@@ -307,12 +310,45 @@
 }
 
 @media (max-width: 768px) {
+  .features {
+    padding: 60px 0 80px 0;
+  }
+
+  .features-header {
+    margin-bottom: 40px;
+  }
+
   .section-title {
-    font-size: 36px;
+    font-size: 32px;
+  }
+  
+  .features-grid {
+    gap: 40px;
+  }
+
+  .feature-card {
+    padding: 24px;
+    height: auto;
+  }
+
+  .feature-icon {
+    width: 56px;
+    height: 56px;
+    font-size: 28px;
+    margin-bottom: 16px;
+  }
+
+  .feature-title {
+    font-size: 20px;
   }
 
   .demo-body {
-    padding: 20px;
-    font-size: 12px;
+    padding: 16px;
+    font-size: 11px;
+  }
+  
+  .json-code {
+    padding: 12px;
+    font-size: 10px;
   }
 }

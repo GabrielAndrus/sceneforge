@@ -89,4 +89,18 @@
   .nav-links {
     display: none;
   }
+
+  .logo {
+    font-size: 20px;
+  }
+
+  .btn-primary {
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .btn-login {
+    font-size: 13px;
+    padding: 8px;
+  }
 }
