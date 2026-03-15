@@ -9,6 +9,7 @@
     "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
     "build": "tsc && vite build",
     "lint": "eslint .",
+    "start": "ts-node server/index.ts",
     "preview": "vite preview"
   },
   "ts-node": {
