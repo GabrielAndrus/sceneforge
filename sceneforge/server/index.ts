@@ -172,6 +172,11 @@ You will receive:
 - Each request's record ID, response status, duration, and response body
 - Whether chaos (broken/edge case data) was used
 
+Requirements:
+- You MUST produce at least 3 findings. Do not stop at 2 — dig into timeouts, status codes, and response patterns.
+- If chaos was injected and the endpoint returned 2xx (e.g. 201) for records with broken or invalid data, you MUST include at least one finding that calls this out: the endpoint accepted chaos/malformed data without validation — that is a real vulnerability (e.g. "Endpoint accepted chaos-injected payload with status 201 — no server-side validation").
+- Every test case MUST reference specific record IDs that failed or behaved unexpectedly (e.g. "Record deal-xyz returned 500", "Record user-abc timed out").
+
 Analyze the results and return pure JSON:
 {
   "summary": "2-3 sentence summary of overall endpoint health",
@@ -191,9 +196,9 @@ Analyze the results and return pure JSON:
     {
       "id": "TC-001",
       "title": "Test case title",
-      "scenario": "Given/When/Then",
+      "scenario": "Given/When/Then — include specific record IDs",
       "expected_result": "What should happen",
-      "actual_result": "What actually happened",
+      "actual_result": "What actually happened for the specific record(s)",
       "status": "pass | fail | warning",
       "priority": "high | medium | low"
     }
@@ -928,6 +933,17 @@ app.post(
       return
     }
 
+    function truncateResponseBody(body: string): string {
+      try {
+        const parsed = JSON.parse(body)
+        const formatted = JSON.stringify(parsed, null, 2)
+        const truncated = formatted.slice(0, 300)
+        return truncated + (formatted.length > 300 ? '...' : '')
+      } catch {
+        return body.slice(0, 300) + (body.length > 300 ? '...' : '')
+      }
+    }
+
     const results = await Promise.allSettled(
       records.map(async (record) => {
         const start = Date.now()
@@ -945,7 +961,7 @@ app.post(
             status: res.status,
             ok: res.ok,
             duration_ms: duration,
-            response_body: body.slice(0, 500),
+            response_body: truncateResponseBody(body),
             error: null,
           } satisfies EndpointTestRecordResult
         } catch (err: unknown) {

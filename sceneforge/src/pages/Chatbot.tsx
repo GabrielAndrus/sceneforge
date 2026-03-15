@@ -1491,7 +1491,9 @@ const Chatbot: React.FC = () => {
                           disabled={isRunningEndpointTest}
                         >
                           <option value="users">Users</option>
-                          <option value="primary_entities">{primaryEntityTabLabel}</option>
+                          <option value="primary_entities">
+                            {sandboxData?.schema_info?.primary_entity_name ? capitalizeLabel(sandboxData.schema_info.primary_entity_name) : 'Records'}
+                          </option>
                           <option value="activity_logs">Activity Logs</option>
                         </select>
                       </div>
