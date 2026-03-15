@@ -516,25 +516,8 @@ const Chatbot: React.FC = () => {
   }, [sandbox?.expires_at])
 
   const loadSidebarData = useCallback(async () => {
-    setIsLoadingPrompts(true)
-    setIsLoadingTemplates(true)
-
-    try {
-      const [nextSandboxes, nextTemplates] = await Promise.all([
-        getSandboxes(),
-        getTemplates(),
-      ])
-
-      setPreviousPrompts(mapSandboxesToPromptItems(nextSandboxes))
-      setTemplates(nextTemplates)
-      writeCachedTemplates(nextTemplates)
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error))
-    } finally {
-      setIsLoadingPrompts(false)
-      setIsLoadingTemplates(false)
-    }
-  }, [])
+  // disabled for demo — no shared history
+}, [])
 
   useEffect(() => {
     void loadSidebarData()
